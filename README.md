@@ -60,7 +60,52 @@ Node.js, Express, better-sqlite3, ванильный HTML/CSS/JS, Chart.js (по
 
 ## Как запустить
 
-Нужен установленный [Node.js](https://nodejs.org/) (18 или новее).
+Нужен установленный Node.js версии 18 или новее (он не входит в macOS/Windows/Linux по
+умолчанию — ставится отдельно один раз).
+
+### Установка Node.js
+
+<details>
+<summary><b>macOS</b></summary>
+
+Вариант 1 — официальный установщик: скачайте `.pkg` с [nodejs.org](https://nodejs.org/) (кнопка LTS) и установите как обычное приложение.
+
+Вариант 2 — через [Homebrew](https://brew.sh/), если он уже установлен:
+```bash
+brew install node
+```
+</details>
+
+<details>
+<summary><b>Windows</b></summary>
+
+Вариант 1 — официальный установщик: скачайте `.msi` с [nodejs.org](https://nodejs.org/) (кнопка LTS), запустите и пройдите мастер установки (Next → Next → Install).
+
+Вариант 2 — через [winget](https://learn.microsoft.com/windows/package-manager/winget/) в PowerShell:
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+</details>
+
+<details>
+<summary><b>Linux</b></summary>
+
+Проще и надёжнее всего — через [nvm](https://github.com/nvm-sh/nvm) (не зависит от версии в репозиториях дистрибутива):
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+nvm install --lts
+```
+
+Либо через пакетный менеджер дистрибутива, например Ubuntu/Debian:
+```bash
+sudo apt update
+sudo apt install nodejs npm
+```
+</details>
+
+Проверить, что установка прошла успешно, можно командой `node -v` — она должна вывести версию (18.x или новее).
+
+### Запуск проекта
 
 ```bash
 git clone https://github.com/alpakafish/my-finances.git
