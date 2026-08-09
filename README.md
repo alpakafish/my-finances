@@ -63,7 +63,8 @@ Node.js, Express, better-sqlite3, ванильный HTML/CSS/JS, Chart.js (по
 Нужен установленный [Node.js](https://nodejs.org/) (18 или новее).
 
 ```bash
-cd smeta-web
+git clone https://github.com/alpakafish/my-finances.git
+cd my-finances
 npm install
 npm start
 ```
@@ -72,6 +73,6 @@ npm start
 
 Либо на Mac просто дважды кликните `start.command` (на Windows — `start.bat`): скрипт сам поднимет сервер и откроет браузер.
 
-Данные хранятся в `smeta-web/data/smeta.db` — это обычный файл, его можно скопировать для бэкапа или перенести на другой компьютер вместе с папкой проекта.
+Данные хранятся в `data/smeta.db` — это обычный файл, его можно скопировать для бэкапа или перенести на другой компьютер вместе с папкой проекта.
 
 Чтобы остановить сервер — закройте терминал/окно скрипта или нажмите `Ctrl+C`.
