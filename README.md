@@ -56,7 +56,7 @@
 
 ## Технологии
 
-Node.js, Express, better-sqlite3, ванильный HTML/CSS/JS, Chart.js (подключён локально, без интернета), ExcelJS для экспорта в `.xlsx`.
+Node.js, Express, `node:sqlite` (встроенный в Node драйвер SQLite — без нативной компиляции при установке), ванильный HTML/CSS/JS, Chart.js (подключён локально, без интернета), ExcelJS для экспорта в `.xlsx`.
 
 ## Как запустить
 

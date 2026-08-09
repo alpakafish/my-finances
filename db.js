@@ -1,11 +1,45 @@
 const path = require('path');
 const fs = require('fs');
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new Database(path.join(DATA_DIR, 'smeta.db'));
+const db = new DatabaseSync(path.join(DATA_DIR, 'smeta.db'));
+
+// node:sqlite (встроен в Node, начиная с 22 LTS — компиляции не требует, в отличие от
+// better-sqlite3, который на некоторых машинах пытается собираться из исходников и падает
+// без настроенных инструментов сборки C++) не имеет .pragma()/.transaction() — весь
+// остальной код (routes/*.js) написан под API better-sqlite3, поэтому просто дописываем
+// эти два метода поверх встроенного драйвера, чтобы больше нигде ничего не менять.
+db.pragma = (str) => db.exec(`PRAGMA ${str}`);
+
+// SAVEPOINT-совместимая реализация — better-sqlite3 умеет вкладывать .transaction() друг
+// в друга (routes/import.js так и делает: findOrCreateCategory внутри runImport), обычный
+// голый BEGIN/COMMIT этого не позволяет ("cannot start a transaction within a transaction").
+let txDepth = 0;
+db.transaction = (fn) => (...args) => {
+  const savepoint = `sp_${txDepth}`;
+  const isOuter = txDepth === 0;
+  txDepth++;
+  try {
+    db.exec(isOuter ? 'BEGIN' : `SAVEPOINT ${savepoint}`);
+    const result = fn(...args);
+    db.exec(isOuter ? 'COMMIT' : `RELEASE ${savepoint}`);
+    return result;
+  } catch (e) {
+    if (isOuter) {
+      db.exec('ROLLBACK');
+    } else {
+      db.exec(`ROLLBACK TO ${savepoint}`);
+      db.exec(`RELEASE ${savepoint}`);
+    }
+    throw e;
+  } finally {
+    txDepth--;
+  }
+};
+
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 

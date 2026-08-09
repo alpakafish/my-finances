@@ -12,7 +12,7 @@ description: Разворачивает, запускает и помогает 
 
 ```
 server.js              — точка входа Express-приложения
-db.js                   — SQLite (better-sqlite3): схема, миграции, сиды категорий по умолчанию
+db.js                   — SQLite (node:sqlite, встроен в Node): схема, миграции, сиды категорий по умолчанию
 routes/
   transactions.js       — CRUD операций (GET/POST/PUT/DELETE /api/transactions)
   categories.js         — CRUD категорий, включая rollup_id (см. ниже) и защиту удаления
@@ -29,8 +29,19 @@ data/smeta.db           — SQLite-файл с данными пользоват
 scripts/seed-demo-data.js — генерирует безопасные демо-данные поверх ПУСТОЙ базы (для скриншотов)
 ```
 
-Технологии: Node.js, Express, better-sqlite3, ванильный HTML/CSS/JS, Chart.js, ExcelJS. Никакой
-сборки (webpack/vite) нет — `public/` отдаётся как статика напрямую.
+Технологии: Node.js, Express, `node:sqlite` (встроенный в Node драйвер, не npm-пакет — см. ниже,
+почему это важно), ванильный HTML/CSS/JS, Chart.js, ExcelJS. Никакой сборки (webpack/vite) нет —
+`public/` отдаётся как статика напрямую.
+
+**Почему `node:sqlite`, а не `better-sqlite3`**: `better-sqlite3` — нативный модуль, при `npm install`
+на машине без прекомпилированного бинарника под конкретную версию Node пытается собраться из
+исходников через node-gyp, для чего нужны настроенные C++ build tools (Visual Studio Build Tools
+на Windows, Xcode Command Line Tools на macOS) — на компьютере обычного пользователя их обычно
+нет, и установка падает без понятной ошибки. `node:sqlite` — часть самого Node.js (с 22 LTS),
+компилировать нечего, `npm install` не трогает нативный тулчейн вообще. `db.js` добавляет поверх
+него `.pragma()` и `.transaction()` (последний — через SAVEPOINT, чтобы поддерживать вложенные
+вызовы, как в `routes/import.js`), чтобы весь остальной код мог использовать привычный API
+better-sqlite3 и не меняться при будущих правках.
 
 ## Ключевая концепция: rollup-категории (цели накопления)
 
@@ -55,8 +66,8 @@ npm start
 
 ## Как вносить изменения
 
-- Бэкенд — обычный Express, роуты в `routes/*.js`, вся работа с БД через `db.js` (better-sqlite3,
-  синхронный API, без ORM).
+- Бэкенд — обычный Express, роуты в `routes/*.js`, вся работа с БД через `db.js` (node:sqlite,
+  синхронный API в духе better-sqlite3, без ORM).
 - Фронтенд — без сборки: правишь `public/app.js`/`public/index.html`/`public/styles.css` и
   обновляешь страницу в браузере, npm-скрипт пересобирать не нужно.
 - Новую вкладку в интерфейсе — по образцу существующих: секция в `index.html` внутри
