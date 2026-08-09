@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Мои финансы — учёт расходов и доходов</title>
+<script src="vendor/chart.umd.js"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>Мои финансы</h1>
+    <p>Локальный учёт расходов и доходов</p>
+  </div>
+  <div style="display:flex; gap:8px;">
+    <div class="tooltip-wrap">
+      <button class="btn secondary" id="importBtn">Импорт из Excel</button>
+      <input type="file" id="importFile" accept=".xlsx" style="display:none;">
+      <div class="tooltip-box">
+        <b>Формат файла для импорта (.xlsx)</b>
+        <ul>
+          <li>Лист с расходами — название начинается с «Траты…», с доходами — с «Приход…» (остальные листы, например «Итого», пропускаются)</li>
+          <li>1-я строка — любой заголовок, 2-я — подписи столбцов (обе игнорируются), данные — с 3-й строки</li>
+          <li>Столбцы по порядку: A — дата, B — сумма, C — заметка (необязательно), D — категория (необязательно, иначе попадёт в «Другое»/«Прочий доход»)</li>
+          <li>Строки без даты или суммы пропускаются</li>
+          <li>Повторный импорт того же файла безопасен — точные дубли не добавляются</li>
+        </ul>
+      </div>
+    </div>
+    <div class="tooltip-wrap">
+      <button class="btn secondary" id="exportBtn">Экспорт в Excel</button>
+      <div class="tooltip-box">
+        Скачает .xlsx с двумя листами: «Операции» — все записи построчно, и «Сводка по месяцам» — суммы по категориям и месяцам.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="dashboard">Дашборд</button>
+    <button class="tab-btn" data-tab="transactions">Операции</button>
+    <button class="tab-btn" data-tab="categories">Категории</button>
+    <button class="tab-btn" data-tab="goals">Цели</button>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div class="tab-panel active" id="tab-dashboard">
+    <div class="card">
+      <div class="section-label" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Отчёт за месяц</span>
+        <div class="month-nav">
+          <button id="prevMonth">‹</button>
+          <select id="monthSelect"></select>
+          <button id="nextMonth">›</button>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric income"><div class="label">Доход</div><div class="value" id="m-income">—</div></div>
+        <div class="metric expense"><div class="label">Расход</div><div class="value" id="m-expense">—</div></div>
+        <div class="metric"><div class="label">Баланс</div><div class="value" id="m-balance">—</div></div>
+      </div>
+      <div class="two-col" id="monthTwoCol">
+        <div>
+          <div class="section-label">Расходы по категориям</div>
+          <div class="cat-list" id="month-cat-list"></div>
+        </div>
+        <div id="structureCol">
+          <div class="section-label">Структура расходов</div>
+          <div class="chart-wrap" style="height: 260px;">
+            <canvas id="pieChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Расходы по месяцам</div>
+      <div class="chart-wrap" style="height: 260px;">
+        <canvas id="expenseOverviewChart"></canvas>
+      </div>
+      <div id="expense-insights"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Доходы по месяцам</div>
+      <div class="chart-wrap" style="height: 260px;">
+        <canvas id="incomeOverviewChart"></canvas>
+      </div>
+      <div id="income-insights"></div>
+    </div>
+  </div>
+
+  <!-- TRANSACTIONS -->
+  <div class="tab-panel" id="tab-transactions">
+    <div class="card">
+      <div class="section-label">Новая операция</div>
+      <form id="txForm">
+        <div class="form-row">
+          <div class="field">
+            <label>Тип</label>
+            <div class="type-toggle" id="txTypeToggle">
+              <button type="button" data-type="expense" class="active">Расход</button>
+              <button type="button" data-type="income">Доход</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Дата</label>
+            <input type="date" id="txDate" required>
+          </div>
+          <div class="field">
+            <label>Категория</label>
+            <select id="txCategory" required></select>
+          </div>
+          <div class="field">
+            <label>Сумма</label>
+            <input type="number" id="txAmount" min="0" step="0.01" required placeholder="0">
+          </div>
+          <div class="field" style="flex:1;">
+            <label>Заметка</label>
+            <input type="text" id="txNote" placeholder="необязательно">
+          </div>
+          <button type="submit" class="btn">Добавить</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="section-label tx-list-header">
+        <span>Операции за месяц</span>
+        <div class="month-nav">
+          <div class="type-toggle" id="txFilterType">
+            <button type="button" data-type="all" class="active">Все</button>
+            <button type="button" data-type="expense">Расходы</button>
+            <button type="button" data-type="income">Доходы</button>
+          </div>
+          <select id="txMonthSelect"></select>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Дата</th><th>Тип</th><th>Категория</th><th>Сумма</th><th>Заметка</th><th></th></tr></thead>
+        <tbody id="txTableBody"></tbody>
+      </table>
+      <div class="empty-hint" id="txEmptyHint" style="display:none;">Пока нет операций за этот месяц</div>
+    </div>
+  </div>
+
+  <!-- CATEGORIES -->
+  <div class="tab-panel" id="tab-categories">
+    <div class="card">
+      <div class="cat-group">
+        <div class="section-label">Категории расходов</div>
+        <div id="expenseCatList"></div>
+        <div class="form-row" style="margin-top:12px;">
+          <input type="text" id="newExpenseCatName" placeholder="Новая категория расходов" style="border:1px solid #d5d5d2; border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px; min-width:200px;">
+          <input type="color" id="newExpenseCatColor" value="#7F77DD">
+          <button class="btn small" id="addExpenseCat">Добавить</button>
+        </div>
+      </div>
+      <div class="cat-group">
+        <div class="section-label">Категории доходов</div>
+        <div id="incomeCatList"></div>
+        <div class="form-row" style="margin-top:12px;">
+          <input type="text" id="newIncomeCatName" placeholder="Новая категория доходов" style="border:1px solid #d5d5d2; border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px; min-width:200px;">
+          <input type="color" id="newIncomeCatColor" value="#1D9E75">
+          <button class="btn small" id="addIncomeCat">Добавить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GOALS -->
+  <div class="tab-panel" id="tab-goals">
+    <div class="card">
+      <div class="section-label">Новая цель</div>
+      <form id="goalForm">
+        <div class="form-row">
+          <div class="field" style="flex:1;">
+            <label>Назначение</label>
+            <input type="text" id="goalName" placeholder="например, Отпуск" required>
+          </div>
+          <div class="field">
+            <label>Сумма цели</label>
+            <input type="number" id="goalAmount" min="0" step="0.01" placeholder="0" required>
+          </div>
+          <div class="field">
+            <label>Срок, мес. (необязательно)</label>
+            <input type="number" id="goalMonths" min="1" step="1" placeholder="например, 9">
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom:10px;">
+          <label>Категория</label>
+          <div class="type-toggle" id="goalCatModeToggle">
+            <button type="button" data-mode="existing" class="active">Существующая</button>
+            <button type="button" data-mode="new">Новая</button>
+          </div>
+        </div>
+
+        <div class="form-row" id="goalExistingCatRow">
+          <div class="field" style="flex:1;">
+            <label>Категория расходов</label>
+            <select id="goalExistingCategory"></select>
+          </div>
+        </div>
+
+        <div class="form-row" id="goalNewCatRow" style="display:none;">
+          <div class="field" style="flex:1;">
+            <label>Название новой категории</label>
+            <input type="text" id="goalNewCatName" placeholder='например, "на отпуск"'>
+          </div>
+          <div class="field">
+            <label>Цвет</label>
+            <input type="color" id="goalNewCatColor" value="#1D9E75">
+          </div>
+          <div class="field" style="flex:1;">
+            <label>Учитывать на Дашборде как
+              <span class="tooltip-wrap anchor-right info-icon-wrap">
+                <span class="info-icon">?</span>
+                <div class="tooltip-box">
+                  Операции в новой категории останутся на виду как есть — в списке операций и в «Категориях». А при подсчёте на Дашборде и в сводке Excel их сумма будет включена в выбранную здесь категорию, чтобы отдельные цели не дробили общую картину расходов.
+                </div>
+              </span>
+            </label>
+            <select id="goalRollupCategory"></select>
+          </div>
+        </div>
+
+        <button type="submit" class="btn">Создать цель</button>
+      </form>
+    </div>
+
+    <div id="goalsList"></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "smeta-web",
+  "version": "1.0.0",
+  "description": "Мои финансы — локальный веб-сервис учёта расходов и доходов",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.0",
+    "multer": "^2.2.0"
+  }
+}
