@@ -2,7 +2,10 @@ const path = require('path');
 const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
 
-const DATA_DIR = path.join(__dirname, 'data');
+// DATA_DIR можно переопределить (desktop-приложение указывает сюда каталог
+// Application Support, чтобы БД не лежала внутри .app и переживала обновления).
+// Веб-версия переменную не задаёт и, как и раньше, использует ./data рядом с проектом.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'smeta.db'));

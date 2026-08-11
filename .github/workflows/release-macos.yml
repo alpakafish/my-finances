@@ -1,0 +1,57 @@
+name: Release macOS Desktop App
+
+# Собирает My Finances.app для arm64 и x64, подписывает и нотаризует (если в
+# секретах репозитория заданы Apple credentials — иначе публикует неподписанный
+# билд, не проваливая пайплайн) и публикует на GitHub Releases.
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: smeta-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install backend deps (shared with legacy web app)
+        run: npm ci
+
+      - name: Backend smoke test
+        run: npm test --if-present
+
+      - name: Install desktop deps
+        working-directory: smeta-web/desktop
+        run: npm ci
+
+      - name: Desktop unit tests
+        working-directory: smeta-web/desktop
+        run: npm test --if-present
+
+      - name: Build + sign + notarize + publish
+        working-directory: smeta-web/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --arm64 --x64 --publish always
+
+      - name: Upload build artifacts (debug copy, in addition to the Release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-finances-macos
+          path: |
+            smeta-web/desktop/dist/*.dmg
+            smeta-web/desktop/dist/*.zip
+          if-no-files-found: error

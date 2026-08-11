@@ -122,3 +122,102 @@ npm start
 Данные хранятся в `data/smeta.db` — это обычный файл, его можно скопировать для бэкапа или перенести на другой компьютер вместе с папкой проекта.
 
 Чтобы остановить сервер — закройте терминал/окно скрипта или нажмите `Ctrl+C`.
+
+## macOS Desktop App
+
+Помимо веб-версии выше, в [`desktop/`](desktop/) есть нативное macOS-приложение
+(Electron), которое встраивает тот же самый бэкенд (`server.js`/`db.js`/`routes/`) —
+пользователю не нужны Node, npm или терминал, никакой `localhost` наружу не
+показывается. Обе версии независимы: веб-версия продолжает работать как раньше.
+Архитектурное решение и его обоснование — в [`desktop/ARCHITECTURE.md`](desktop/ARCHITECTURE.md).
+
+### Разработка
+
+```bash
+cd desktop
+npm install
+npm start          # запускает Electron в dev-режиме поверх ../server.js напрямую
+npm test           # backend-интеграционные тесты + сквозной запуск .app
+```
+
+### Сборка `.app`
+
+```bash
+cd desktop
+npm install
+npm run dist:dir    # неподписанная dev-сборка в desktop/dist/mac*/My Finances.app
+npm run dist        # полная сборка (dmg + zip, arm64 + x64) — подписывает/нотарицирует,
+                     # если заданы Apple-переменные окружения (см. «Apple Signing» ниже),
+                     # иначе выдаёт неподписанный билд
+```
+
+### Хранение данных
+
+При первом запуске приложение создаёт SQLite-базу в стандартном macOS
+Application Support (**не** внутри `.app` — обновления приложения её не трогают):
+
+```
+~/Library/Application Support/My Finances/data/smeta.db
+```
+
+Логи — там же, в `~/Library/Logs/My Finances/main.log` (в проде) или
+`~/Library/Logs/my-finances-desktop/main.log` (при запуске из dev-режима, `npm start`).
+Пароли/токены/суммы операций в логи не пишутся (см. redact-хук в `desktop/src/main.js`).
+
+### Security / Keychain
+
+В приложении сегодня нет ни одного секрета (API-ключей, OAuth-токенов и т.п.) —
+единственная интеграция, `.xlsx` импорт/экспорт, работает полностью локально.
+Поэтому Keychain сейчас ничего не хранит; когда/если появится секрет, требующий
+защиты, используйте `electron.safeStorage` (обёртка над Keychain) — заводить
+собственную криптографию не нужно.
+
+### Releases (GitHub Actions)
+
+`.github/workflows/release-macos.yml` — при пуше тега `desktop-v*` (или вручную,
+`workflow_dispatch`) собирает `.app` под `arm64` и `x86_64` отдельными артефактами
+(без universal-бинаря — так меньше итоговый размер на скачивание для каждой
+архитектуры), подписывает/нотарицирует при наличии секретов и публикует на
+GitHub Releases через `electron-builder --publish always`.
+
+Обновления внутри приложения — `electron-updater`, тянет релизы из того же
+GitHub Releases; пользователь видит уведомление и жмёт «Перезапустить сейчас»,
+БД в Application Support обновление не трогает (Phase 10).
+
+### Apple Signing / Notarization
+
+Локально в этом окружении сертификатов Developer ID нет (`security find-identity`
+вернул 0 identities) — `npm run dist` собирает неподписанный dev-билд, это
+ожидаемо. Для подписанных/нотарицированных релизов из CI задайте в GitHub
+Secrets репозитория:
+
+| Secret | Что это |
+|---|---|
+| `MAC_CSC_LINK` | Developer ID Application сертификат, `.p12`, в base64 |
+| `MAC_CSC_KEY_PASSWORD` | пароль от `.p12` |
+| `APPLE_ID` | Apple ID разработчика |
+| `APPLE_APP_SPECIFIC_PASSWORD` | app-specific password для notarytool |
+| `APPLE_TEAM_ID` | Team ID из Apple Developer |
+
+Без них workflow не падает — просто публикует неподписанный билд
+(`desktop/scripts/notarize.js` логирует и пропускает нотаризацию).
+
+### CI/CD
+
+GitHub Actions на `macos-latest`: `npm ci` для корневых зависимостей (общий
+бэкенд) → `npm test` (интеграционные тесты сервера) → `npm ci`/`npm test` в
+`desktop/` (unit + сквозной запуск `.app`) → `electron-builder --publish always`.
+
+### Troubleshooting
+
+- **Приложение не открывается, пишет про повреждённый файл** — неподписанный
+  билд не проходит Gatekeeper при обычном скачивании; либо используйте
+  подписанный релиз из CI, либо `xattr -dr com.apple.quarantine "My Finances.app"`
+  для локально собранного dev-билда.
+- **Не видно новых данных после обновления** — БД лежит вне `.app`
+  (`~/Library/Application Support/My Finances`), обновление её не удаляет;
+  если данные всё же пропали, проверьте, что не открыт старый dev-инстанс
+  с другим `--user-data-dir`.
+- **«Бэкенд остановлен» при запуске** — см.
+  `~/Library/Logs/My Finances/main.log`; частая причина — нет прав на запись в
+  Application Support (по умолчанию так не бывает, но проверить стоит первым).

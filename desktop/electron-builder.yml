@@ -1,0 +1,58 @@
+appId: com.alpakafish.myfinances
+productName: My Finances
+copyright: Copyright © ${author}
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - src/**/*
+  - package.json
+  - "!**/*.map"
+
+# server.js/db.js/routes/public живут в родительском smeta-web (общий с web-версией
+# код, не дублируется). electron-builder копирует их и их runtime node_modules
+# (express/exceljs/multer) в Resources/app — см. desktop/src/backend.js -> backendRoot().
+extraResources:
+  - from: ../server.js
+    to: app/server.js
+  - from: ../db.js
+    to: app/db.js
+  - from: ../routes
+    to: app/routes
+  - from: ../public
+    to: app/public
+  - from: ../node_modules
+    to: app/node_modules
+
+mac:
+  category: public.app-category.finance
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # icon: build/icon.icns   # добавьте .icns и раскомментируйте — без него используется дефолтная иконка Electron
+  extendInfo:
+    NSHumanReadableCopyright: Copyright © ${author}
+
+dmg:
+  sign: false
+
+afterSign: scripts/notarize.js
+
+publish:
+  provider: github
+  owner: alpakafish
+  repo: my-finances
+
+# Code signing / notarization читаются electron-builder напрямую из окружения:
+#   CSC_LINK, CSC_KEY_PASSWORD                — сертификат Developer ID Application (.p12, base64) + пароль
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD,
+#   APPLE_TEAM_ID                             — для notarytool (см. scripts/notarize.js)
+# Без них electron-builder соберёт неподписанный dev-билд (см. README «Apple Signing»).

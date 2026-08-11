@@ -1,0 +1,27 @@
+{
+  "name": "my-finances-desktop",
+  "version": "1.0.0",
+  "description": "My Finances — production macOS desktop app (embeds smeta-web backend)",
+  "private": true,
+  "main": "src/main.js",
+  "author": "alpakafish",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac",
+    "dist:dir": "electron-builder --mac --dir",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^2.5.0",
+    "electron": "^43.3.0",
+    "electron-builder": "^25.1.0"
+  }
+}
