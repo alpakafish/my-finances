@@ -8,6 +8,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+// На Windows файл smeta.db остаётся заблокированным ОС ещё какое-то короткое время
+// после kill() дочернего процесса (в отличие от POSIX, где unlink открытого файла
+// работает всегда) — без retry здесь падает EBUSY. maxRetries/retryDelay — штатный
+// способ fs.rmSync справиться с этим (см. доки Node: ретраит на EBUSY/EPERM/и т.п.).
+function removeDataDir(dir) {
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
 function startServer(dataDir) {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
@@ -37,7 +45,7 @@ before(async () => {
 
 after(async () => {
   child.kill('SIGTERM');
-  fs.rmSync(tmpDataDir, { recursive: true, force: true });
+  removeDataDir(tmpDataDir);
 });
 
 test('seeds default categories on first launch', async () => {
@@ -168,7 +176,7 @@ test('export from one instance re-imports cleanly on a fresh one (multi-device b
     assert.ok(may.some((t) => t.type === 'income' && t.amount === 55000));
   } finally {
     otherChild.kill('SIGTERM');
-    fs.rmSync(otherDataDir, { recursive: true, force: true });
+    removeDataDir(otherDataDir);
   }
 });
 
@@ -220,7 +228,7 @@ test('settings: delete-all-data wipes transactions/goals and resets categories t
     assert.equal(addRes.status, 201);
   } finally {
     wipeChild.kill('SIGTERM');
-    fs.rmSync(wipeDataDir, { recursive: true, force: true });
+    removeDataDir(wipeDataDir);
   }
 });
 
@@ -249,6 +257,6 @@ test('onboarding-seen flag survives a restart on a different port (the desktop s
       second.proc.kill('SIGTERM');
     }
   } finally {
-    fs.rmSync(onboardDataDir, { recursive: true, force: true });
+    removeDataDir(onboardDataDir);
   }
 });

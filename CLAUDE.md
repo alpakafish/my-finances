@@ -126,6 +126,26 @@ one.
   *launching* `My Finances.exe` obviously still needs a real Windows machine
   or the `windows-latest` CI runner (`npm test` in `desktop/` via the release
   workflow).
+- **`test/server.test.js`'s cleanup (`kill('SIGTERM')` immediately followed by
+  `fs.rmSync(dataDir, ...)`) fails with `EBUSY: resource busy or locked,
+  unlink ... smeta.db` on Windows, even though it always passed on macOS/Linux
+  CI.** Found on the very first `windows-latest` CI run (2026-08-12,
+  `v1.0.9`'s first attempt — this is the *root backend* test, unrelated to
+  Electron packaging, so it also would have broken `npm test` for the plain
+  web version on Windows). Root cause: POSIX lets you `unlink` a file that
+  still has an open handle (the inode just survives until the last fd
+  closes); Windows/NTFS does not — a `node:sqlite` handle held by the
+  just-killed child process can still be locking the file for a few ms after
+  `kill()` returns (killing is not synchronous, and even after the process
+  is fully gone the OS can take a moment to release the handle). Fix:
+  `removeDataDir()` helper wraps `fs.rmSync` with `maxRetries: 10,
+  retryDelay: 100` — the standard Node-documented way to retry through
+  exactly this class of transient Windows `EBUSY`/`EPERM` — used at all 4
+  cleanup call sites in the file. `desktop/test/launch.test.js` already
+  awaited the child's `'exit'` event before its own `rmSync` (more correct
+  than the root test's fire-and-forget `kill()`), but got the same
+  `maxRetries`/`retryDelay` added anyway as a cheap safety net against the
+  same "OS hasn't fully released the handle yet" race.
 
 ## Building & releasing
 

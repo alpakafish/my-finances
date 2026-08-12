@@ -49,5 +49,9 @@ test('app boots, seeds db in userData, shuts down cleanly', async () => {
   });
   assert.equal(exitCode, 0);
 
-  fs.rmSync(userDataDir, { recursive: true, force: true });
+  // maxRetries/retryDelay: on Windows the OS can hold the file handle on smeta.db
+  // for a brief moment even after the child process's 'exit' event has fired —
+  // see test/server.test.js's removeDataDir for the same EBUSY issue hit first
+  // in the root backend tests (2026-08-12, first Windows CI run).
+  fs.rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
