@@ -86,8 +86,12 @@ th, td { text-align: left; padding: 8px 6px; font-size: 13px; border-bottom: 1px
 th { color: #999; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
 td.amount-expense { color: #D85A30; }
 td.amount-income { color: #1D9E75; }
+.row-actions { display: flex; gap: 6px; }
 .row-actions button { border: none; background: none; cursor: pointer; color: #999; font-size: 13px; }
 .row-actions button:hover { color: #1a1a18; }
+
+.tx-edit-row input, .tx-edit-row select { width: 100%; border: 1px solid #d5d5d2; border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 13px; }
+.tx-edit-row td { padding: 6px; }
 
 .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 16px; }
 .field { display: flex; flex-direction: column; gap: 4px; }

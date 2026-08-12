@@ -262,7 +262,10 @@ async function loadTransactionsTable() {
       <td>${r.category_name}</td>
       <td class="amount-${r.type}">${fmt(r.amount)}</td>
       <td>${r.note || ''}</td>
-      <td class="row-actions"><button data-role="delete" title="Удалить">✕</button></td>
+      <td class="row-actions">
+        <button data-role="edit" title="Изменить">✎</button>
+        <button data-role="delete" title="Удалить">✕</button>
+      </td>
     </tr>
   `).join('');
 
@@ -276,6 +279,70 @@ async function loadTransactionsTable() {
       await loadTransactionsTable();
       refreshDashboard();
     });
+  });
+
+  tbody.querySelectorAll('[data-role="edit"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.closest('tr').dataset.id;
+      const tx = currentTxRows.find((r) => String(r.id) === String(id));
+      if (tx) renderTxEditRow(tx);
+    });
+  });
+}
+
+// ---------- Edit transaction (inline row) ----------
+function categoryOptionsHtml(type, selectedId) {
+  return categories.filter((c) => c.type === type)
+    .map((c) => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${c.name}</option>`)
+    .join('');
+}
+
+function renderTxEditRow(tx) {
+  const row = document.querySelector(`#txTableBody tr[data-id="${tx.id}"]`);
+  if (!row) return;
+  row.classList.add('tx-edit-row');
+  row.innerHTML = `
+    <td><input type="date" class="edit-date" value="${tx.date}"></td>
+    <td>
+      <select class="edit-type">
+        <option value="expense" ${tx.type === 'expense' ? 'selected' : ''}>Расход</option>
+        <option value="income" ${tx.type === 'income' ? 'selected' : ''}>Доход</option>
+      </select>
+    </td>
+    <td><select class="edit-category">${categoryOptionsHtml(tx.type, tx.category_id)}</select></td>
+    <td><input type="number" class="edit-amount" min="0" step="0.01" value="${tx.amount}"></td>
+    <td><input type="text" class="edit-note" value="${tx.note || ''}"></td>
+    <td class="row-actions">
+      <button data-role="save-edit" title="Сохранить">✓</button>
+      <button data-role="cancel-edit" title="Отмена">✕</button>
+    </td>
+  `;
+
+  row.querySelector('.edit-type').addEventListener('change', (e) => {
+    row.querySelector('.edit-category').innerHTML = categoryOptionsHtml(e.target.value, null);
+  });
+
+  row.querySelector('[data-role="cancel-edit"]').addEventListener('click', () => loadTransactionsTable());
+
+  row.querySelector('[data-role="save-edit"]').addEventListener('click', async () => {
+    const payload = {
+      date: row.querySelector('.edit-date').value,
+      type: row.querySelector('.edit-type').value,
+      category_id: Number(row.querySelector('.edit-category').value),
+      amount: Number(row.querySelector('.edit-amount').value),
+      note: row.querySelector('.edit-note').value,
+    };
+    if (!payload.date || !payload.category_id || !(payload.amount > 0)) {
+      toast('Заполните дату, категорию и сумму (> 0)', true);
+      return;
+    }
+    try {
+      await api(`/api/transactions/${tx.id}`, { method: 'PUT', body: JSON.stringify(payload) });
+      invalidateUndo();
+      toast('Операция изменена');
+      await loadTransactionsTable();
+      refreshDashboard();
+    } catch (e) { toast(e.message, true); }
   });
 }
 
@@ -929,8 +996,8 @@ const TOUR_STEPS = [
   {
     tab: 'transactions',
     selector: '#txListCard',
-    title: 'Операции — список и удаление',
-    text: 'Здесь можно удалить операцию, отфильтровать список по типу и выбрать месяц. Удалённую по ошибке операцию можно вернуть кнопкой «Отменить» во всплывающем уведомлении или сочетанием Cmd/Ctrl+Z — пока не сделано другое изменение.',
+    title: 'Операции — список, изменение и удаление',
+    text: 'Кнопка ✎ открывает редактирование прямо в строке — можно поменять дату, тип, категорию, сумму и заметку, все графики пересчитаются. Кнопка ✕ удаляет операцию; удалённую по ошибке можно вернуть кнопкой «Отменить» во всплывающем уведомлении или сочетанием Cmd/Ctrl+Z — пока не сделано другое изменение. Список фильтруется по типу и месяцу сверху.',
   },
   // ---------- Категории ----------
   {

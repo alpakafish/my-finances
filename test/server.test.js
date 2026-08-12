@@ -65,6 +65,26 @@ test('transaction CRUD round-trip', async () => {
   const list = await listRes.json();
   assert.ok(list.some((t) => t.id === created.id));
 
+  const transport = categories.find((c) => c.name === 'Транспорт') || categories.find((c) => c.type === 'expense' && c.id !== food.id);
+  const editRes = await fetch(`${baseUrl}/api/transactions/${created.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2026-09-01', type: 'expense', category_id: transport.id, amount: 777, note: 'edited' }),
+  });
+  assert.equal(editRes.status, 200);
+  const edited = await editRes.json();
+  assert.equal(edited.amount, 777);
+  assert.equal(edited.category_id, transport.id);
+  assert.equal(edited.date, '2026-09-01');
+
+  const oldMonthList = await (await fetch(`${baseUrl}/api/transactions?month=2026-08`)).json();
+  assert.ok(!oldMonthList.some((t) => t.id === created.id), 'edited transaction should move out of its old month');
+  const newMonthList = await (await fetch(`${baseUrl}/api/transactions?month=2026-09`)).json();
+  assert.ok(newMonthList.some((t) => t.id === created.id && t.amount === 777), 'edited transaction should appear in its new month with new amount');
+
+  const summaryAfterEdit = await (await fetch(`${baseUrl}/api/summary/2026-09`)).json();
+  assert.ok(summaryAfterEdit.totalExpense >= 777, 'monthly summary should reflect the edited transaction');
+
   const delRes = await fetch(`${baseUrl}/api/transactions/${created.id}`, { method: 'DELETE' });
   assert.equal(delRes.status, 204);
 });
