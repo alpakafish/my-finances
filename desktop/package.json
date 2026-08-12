@@ -1,6 +1,6 @@
 {
   "name": "my-finances-desktop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "My Finances — production macOS desktop app (embeds smeta-web backend)",
   "private": true,
   "main": "src/main.js",
