@@ -207,6 +207,33 @@ com.apple.quarantine "0081;00000000;Google Chrome;" /tmp/x/*.app`, then
 spawn the full set of Electron helper processes and a real window, not just
 one lingering main-binary process under `AppTranslocation`).
 
+**In-app auto-update (Squirrel.Mac) cannot work without a real Developer ID
+cert either — found 2026-08-12, `v1.0.2`→`v1.0.3`.** This is a separate
+mechanism from the Gatekeeper/DMG-open issues above: `electron-updater`'s
+macOS path hands the downloaded update to the OS's built-in Squirrel.Mac
+framework, which independently verifies the new bundle's code signature
+against the *running* app's signature ("designated requirement") before
+letting it install — this happens automatically right after download
+completes, not when the user clicks "restart". A real Developer ID
+signature stays consistent (same Team ID) across every build, so this
+passes; our ad-hoc signature (`codesign --sign -`, see above) is freshly
+generated per build with no stable identity, so it always fails:
+`Code signature at URL ... did not pass validation` in `main.log`, a few
+seconds after "New version X has been downloaded". The UI had already shown
+"update ready, restart now" (from `update-downloaded`) by that point, so the
+user sees a "Restart Now" button that silently does nothing when clicked —
+the update was already broken before the click, not because of it.
+
+Fix: don't attempt the Squirrel.Mac download/install path at all while
+unsigned. `desktop/src/main.js` sets `autoUpdater.autoDownload = false` and
+never calls `downloadUpdate()`/`quitAndInstall()` — on `update-available` it
+just tells the user a new version exists and opens the GitHub releases page
+(`shell.openExternal`) for a manual DMG download/reinstall, which is already
+a verified-working flow (see the Gatekeeper fix above). If a real Developer
+ID cert is ever added (see "Apple signing/notarization" below), this is the
+place to switch back to the full auto-download-and-install flow — with a
+consistent real signature, Squirrel.Mac's validation would actually pass.
+
 ## README is for users, not developers
 
 README.md should only ever contain what a non-technical person downloading
