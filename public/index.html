@@ -21,9 +21,8 @@
       <div class="tooltip-box">
         <b>Формат файла для импорта (.xlsx)</b>
         <ul>
-          <li>Лист с расходами — название начинается с «Траты…», с доходами — с «Приход…» (остальные листы, например «Итого», пропускаются)</li>
-          <li>1-я строка — любой заголовок, 2-я — подписи столбцов (обе игнорируются), данные — с 3-й строки</li>
-          <li>Столбцы по порядку: A — дата, B — сумма, C — заметка (необязательно), D — категория (необязательно, иначе попадёт в «Другое»/«Прочий доход»)</li>
+          <li>Файл, скачанный кнопкой «Экспорт в Excel» — из него, наоборот, восстановятся все те же операции: удобно для переноса на другое устройство или бэкапа</li>
+          <li>Либо ручная таблица: лист с расходами — название начинается с «Траты…», с доходами — с «Приход…» (остальные листы, например «Итого», пропускаются); 1-я строка — любой заголовок, 2-я — подписи столбцов (обе игнорируются), данные — с 3-й строки; столбцы по порядку — A: дата, B: сумма, C: заметка (необязательно), D: категория (необязательно, иначе попадёт в «Другое»/«Прочий доход»)</li>
           <li>Строки без даты или суммы пропускаются</li>
           <li>Повторный импорт того же файла безопасен — точные дубли не добавляются</li>
         </ul>
@@ -32,9 +31,10 @@
     <div class="tooltip-wrap">
       <button class="btn secondary" id="exportBtn">Экспорт в Excel</button>
       <div class="tooltip-box">
-        Скачает .xlsx с двумя листами: «Операции» — все записи построчно, и «Сводка по месяцам» — суммы по категориям и месяцам.
+        Скачает .xlsx с двумя листами: «Операции» — все записи построчно, и «Сводка по месяцам» — суммы по категориям и месяцам. Этот же файл можно загрузить обратно через «Импорт из Excel» — на этом или на другом устройстве, — чтобы перенести данные или сделать бэкап.
       </div>
     </div>
+    <button class="btn secondary icon-btn" id="helpBtn" type="button" title="Показать обзор приложения" aria-label="Показать обзор приложения">?</button>
   </div>
 </div>
 
@@ -45,11 +45,13 @@
     <button class="tab-btn" data-tab="transactions">Операции</button>
     <button class="tab-btn" data-tab="categories">Категории</button>
     <button class="tab-btn" data-tab="goals">Цели</button>
+    <button class="tab-btn" data-tab="years">По годам</button>
+    <button class="tab-btn" data-tab="settings">Настройки</button>
   </div>
 
   <!-- DASHBOARD -->
   <div class="tab-panel active" id="tab-dashboard">
-    <div class="card">
+    <div class="card" id="dashboardMonthCard">
       <div class="section-label" style="display:flex; justify-content:space-between; align-items:center;">
         <span>Отчёт за месяц</span>
         <div class="month-nav">
@@ -77,19 +79,23 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="section-label">Расходы по месяцам</div>
-      <div class="chart-wrap" style="height: 260px;">
-        <canvas id="expenseOverviewChart"></canvas>
-      </div>
+    <div class="card" id="expenseChartCard">
+      <div class="section-label">Расходы по месяцам, <span data-role="currentYearLabel"></span></div>
+      <div class="chart-scroll"><div class="chart-scroll-inner">
+        <div class="chart-wrap" style="height: 260px;">
+          <canvas id="expenseOverviewChart"></canvas>
+        </div>
+      </div></div>
       <div id="expense-insights"></div>
     </div>
 
     <div class="card">
-      <div class="section-label">Доходы по месяцам</div>
-      <div class="chart-wrap" style="height: 260px;">
-        <canvas id="incomeOverviewChart"></canvas>
-      </div>
+      <div class="section-label">Доходы по месяцам, <span data-role="currentYearLabel"></span></div>
+      <div class="chart-scroll"><div class="chart-scroll-inner">
+        <div class="chart-wrap" style="height: 260px;">
+          <canvas id="incomeOverviewChart"></canvas>
+        </div>
+      </div></div>
       <div id="income-insights"></div>
     </div>
   </div>
@@ -128,7 +134,7 @@
       </form>
     </div>
 
-    <div class="card">
+    <div class="card" id="txListCard">
       <div class="section-label tx-list-header">
         <span>Операции за месяц</span>
         <div class="month-nav">
@@ -236,9 +242,113 @@
     <div id="goalsList"></div>
   </div>
 
+  <!-- YEARS -->
+  <div class="tab-panel" id="tab-years">
+    <div class="card" id="yearSingleCard">
+      <div class="section-label" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <span>Операции по месяцам за год</span>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <div class="type-toggle" id="yearSingleTypeToggle">
+            <button type="button" data-type="expense" class="active">Расходы</button>
+            <button type="button" data-type="income">Доходы</button>
+          </div>
+          <select id="yearSingleSelect"></select>
+        </div>
+      </div>
+      <div class="chart-scroll"><div class="chart-scroll-inner">
+        <div class="chart-wrap" style="height: 260px;">
+          <canvas id="yearSingleChart"></canvas>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="card">
+      <div class="section-label" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <span>Сравнение годов между собой</span>
+        <div class="type-toggle" id="yearsCompareTypeToggle">
+          <button type="button" data-type="expense" class="active">Расходы</button>
+          <button type="button" data-type="income">Доходы</button>
+        </div>
+      </div>
+      <div class="year-chips" id="yearsCompareChips"></div>
+      <div class="chart-wrap" style="height: 300px;">
+        <canvas id="yearsCompareChart"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Итоги по годам</div>
+      <table>
+        <thead><tr><th>Год</th><th>Доход</th><th>Расход</th><th>Баланс</th></tr></thead>
+        <tbody id="yearsTotalsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="tab-panel" id="tab-settings">
+    <div class="card">
+      <div class="section-label">Безопасность</div>
+      <div class="settings-row">
+        <div class="settings-row-text">
+          <div class="settings-row-title">Защищать приложение паролем</div>
+          <div class="settings-row-desc" id="appLockDesc">При запуске приложения нужно будет подтвердить личность — Touch ID (если есть) или пароль от учётной записи Mac.</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="appLockToggle">
+          <span class="switch-track"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Данные</div>
+      <div class="settings-row">
+        <div class="settings-row-text">
+          <div class="settings-row-title">Удалить все данные</div>
+          <div class="settings-row-desc">Безвозвратно очистит все операции, категории и цели за всё время. Категории вернутся к списку по умолчанию.</div>
+        </div>
+        <button class="btn danger" id="deleteAllDataBtn">Удалить всё</button>
+      </div>
+    </div>
+  </div>
+
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast">
+  <span id="toastMsg"></span>
+  <button type="button" id="toastUndoBtn" class="toast-undo" hidden>
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M3.51 13a9 9 0 1 0 .49-6.36L3 7"/></svg>
+    Отменить
+  </button>
+</div>
+
+<div class="modal-overlay" id="confirmModal" hidden>
+  <div class="modal">
+    <h3 id="confirmModalTitle"></h3>
+    <p id="confirmModalText"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn secondary" id="confirmModalCancel">Отмена</button>
+      <button type="button" class="btn danger" id="confirmModalConfirm">Удалить</button>
+    </div>
+  </div>
+</div>
+
+<div class="tour-overlay" id="tourOverlay" hidden>
+  <div class="tour-spotlight" id="tourSpotlight"></div>
+  <div class="tour-card" id="tourCard">
+    <div class="tour-card-title" id="tourTitle"></div>
+    <div class="tour-card-text" id="tourText"></div>
+    <div class="tour-card-footer">
+      <span class="tour-step-count" id="tourStepCount"></span>
+      <div class="tour-card-actions">
+        <button type="button" class="btn small secondary" id="tourSkipBtn">Пропустить</button>
+        <button type="button" class="btn small secondary" id="tourPrevBtn">Назад</button>
+        <button type="button" class="btn small" id="tourNextBtn">Далее</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script src="app.js"></script>
 </body>

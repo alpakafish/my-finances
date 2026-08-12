@@ -1,9 +1,12 @@
 const path = require('path');
-const { app, BrowserWindow, Menu, shell, dialog, session } = require('electron');
+const fs = require('fs');
+const { app, BrowserWindow, Menu, shell, dialog, session, ipcMain } = require('electron');
 const log = require('electron-log/main');
 const { autoUpdater } = require('electron-updater');
 const { Backend, dataDir } = require('./backend');
 const { buildMenu } = require('./menu');
+const config = require('./config');
+const auth = require('./auth');
 
 log.initialize();
 log.transports.file.level = 'info';
@@ -18,6 +21,11 @@ log.hooks.push((message) => {
   }
   return message;
 });
+
+// Electron берёт имя для userData/logs из package.json ("name": "my-finances-desktop"),
+// а не из productName электрон-билдера — задаём явно, чтобы пути на диске совпадали
+// с тем, что описано в README ("My Finances"), а не с internal npm-именем пакета.
+app.setName('My Finances');
 
 const backend = new Backend();
 let mainWindow = null;
@@ -64,6 +72,54 @@ function showFatalError(title, message) {
   dialog.showErrorBox(title, message);
 }
 
+// ---------- Защита паролем/Touch ID ----------
+// IPC-обёртки над desktop/src/auth.js + config.js. Пароль (если введён) идёт
+// напрямую в auth.verifyMacPassword и никогда не логируется и не сохраняется —
+// см. log.hooks выше, которое дополнительно вычищает похожие на пароль строки.
+ipcMain.handle('app-lock:get', () => config.isAppLockEnabled());
+ipcMain.handle('app-lock:set', (event, enabled) => { config.setAppLockEnabled(enabled); return true; });
+ipcMain.handle('app-lock:can-touchid', () => auth.canUseTouchID());
+ipcMain.handle('app-lock:authenticate', (event, reason) => auth.promptTouchID(reason || 'Открыть «Мои финансы»'));
+ipcMain.handle('app-lock:password', (event, password) => auth.verifyMacPassword(password));
+
+function showLockScreen() {
+  return new Promise((resolve) => {
+    const lockWin = new BrowserWindow({
+      width: 380,
+      height: 380,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      title: 'Мои финансы — вход',
+      backgroundColor: '#f5f5f3',
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+      show: false,
+    });
+    lockWin.setMenuBarVisibility(false);
+    lockWin.once('ready-to-show', () => lockWin.show());
+    lockWin.loadFile(path.join(__dirname, 'lock.html'));
+
+    let resolved = false;
+    const onUnlocked = () => {
+      if (resolved) return;
+      resolved = true;
+      ipcMain.removeListener('app-lock:unlocked', onUnlocked);
+      lockWin.close();
+      resolve(true);
+    };
+    ipcMain.on('app-lock:unlocked', onUnlocked);
+    lockWin.on('closed', () => {
+      ipcMain.removeListener('app-lock:unlocked', onUnlocked);
+      if (!resolved) { resolved = true; resolve(false); }
+    });
+  });
+}
+
 async function launch() {
   // Экспорт в Excel скачивается фронтендом как обычный download — вместо тихого
   // сохранения в ~/Downloads показываем нативный Save As с осмысленным именем.
@@ -86,9 +142,20 @@ async function launch() {
 
   try {
     const port = await backend.start();
+
+    if (config.isAppLockEnabled()) {
+      const unlocked = await showLockScreen();
+      if (!unlocked) { app.quit(); return; }
+    }
+
     createWindow(port);
     Menu.setApplicationMenu(buildMenu({ onCheckForUpdates: () => autoUpdater.checkForUpdatesAndNotify() }));
-    if (app.isPackaged) autoUpdater.checkForUpdatesAndNotify().catch((e) => log.warn('[updater]', e.message));
+    // app-update.yml существует только в билдах, собранных с --publish (настоящий релиз);
+    // в локальных dev-сборках (--dir/без publish) его нет — не дёргаем апдейтер впустую.
+    const updateConfigExists = fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'));
+    if (app.isPackaged && updateConfigExists) {
+      autoUpdater.checkForUpdatesAndNotify().catch((e) => log.warn('[updater]', e.message));
+    }
   } catch (e) {
     showFatalError(
       'Не удалось запустить приложение',

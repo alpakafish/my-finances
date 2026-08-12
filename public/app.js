@@ -42,12 +42,57 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-function toast(message, isError = false, duration = 2500) {
+function toast(message, isError = false, duration = 2500, action = null) {
   const el = document.getElementById('toast');
-  el.textContent = message;
+  const undoBtn = document.getElementById('toastUndoBtn');
+  document.getElementById('toastMsg').textContent = message;
   el.className = 'toast show' + (isError ? ' error' : '');
+  undoBtn.hidden = !action;
+  undoBtn.onclick = action ? () => { action(); el.className = 'toast'; clearTimeout(toast._t); } : null;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { el.className = 'toast'; }, duration);
+  toast._t = setTimeout(() => { el.className = 'toast'; }, action ? Math.max(duration, 8000) : duration);
+}
+
+// ---------- Undo (пока доступна только отмена удаления операции) ----------
+// Живёт до следующего изменения данных — не по таймеру: если тост уже скрылся,
+// Cmd/Ctrl+Z всё ещё восстановит операцию, пока ничего другого не поменялось.
+let pendingUndo = null;
+function invalidateUndo() { pendingUndo = null; }
+
+async function undoLastDelete() {
+  if (!pendingUndo) return;
+  const restore = pendingUndo;
+  pendingUndo = null;
+  try {
+    await api('/api/transactions', { method: 'POST', body: JSON.stringify(restore) });
+    toast('Удаление отменено');
+    await loadTransactionsTable();
+    refreshDashboard();
+  } catch (e) { toast(e.message, true); }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.key.toLowerCase() !== 'z') return;
+  const t = e.target;
+  const isEditable = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+  if (isEditable || !pendingUndo) return;
+  e.preventDefault();
+  undoLastDelete();
+});
+
+// ---------- Confirm modal ----------
+function showConfirmModal({ title, text, confirmLabel = 'Удалить', onConfirm }) {
+  const overlay = document.getElementById('confirmModal');
+  document.getElementById('confirmModalTitle').textContent = title;
+  document.getElementById('confirmModalText').textContent = text;
+  const confirmBtn = document.getElementById('confirmModalConfirm');
+  confirmBtn.textContent = confirmLabel;
+  const cancelBtn = document.getElementById('confirmModalCancel');
+
+  const close = () => { overlay.hidden = true; confirmBtn.onclick = null; cancelBtn.onclick = null; };
+  confirmBtn.onclick = async () => { close(); await onConfirm(); };
+  cancelBtn.onclick = close;
+  overlay.hidden = false;
 }
 
 // ---------- Tabs ----------
@@ -57,6 +102,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+    if (btn.dataset.tab === 'years') loadYearsTab();
   });
 });
 
@@ -98,6 +144,7 @@ function renderCategoryManageLists() {
         const color = row.querySelector('[data-role="color"]').value;
         try {
           await api(`/api/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, color }) });
+          invalidateUndo();
           toast('Категория обновлена');
           await loadCategories();
           refreshDashboard();
@@ -106,6 +153,7 @@ function renderCategoryManageLists() {
       row.querySelector('[data-role="delete"]').addEventListener('click', async () => {
         try {
           await api(`/api/categories/${id}`, { method: 'DELETE' });
+          invalidateUndo();
           toast('Категория удалена');
           await loadCategories();
           refreshDashboard();
@@ -119,6 +167,7 @@ function renderCategoryManageLists() {
             const targetId = Number(target);
             if (targetId && others.some((c) => c.id === targetId)) {
               await api(`/api/categories/${id}?reassignTo=${targetId}`, { method: 'DELETE' });
+              invalidateUndo();
               toast('Операции перенесены, категория удалена');
               await loadCategories();
               refreshDashboard();
@@ -144,6 +193,7 @@ async function addCategory(type, nameId, colorId) {
   if (!name) return;
   try {
     await api('/api/categories', { method: 'POST', body: JSON.stringify({ name, type, color: colorEl.value }) });
+    invalidateUndo();
     nameEl.value = '';
     toast('Категория добавлена');
     await loadCategories();
@@ -171,6 +221,7 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
   };
   try {
     await api('/api/transactions', { method: 'POST', body: JSON.stringify(payload) });
+    invalidateUndo();
     document.getElementById('txAmount').value = '';
     document.getElementById('txNote').value = '';
     toast('Операция добавлена');
@@ -189,10 +240,13 @@ document.getElementById('txFilterType').addEventListener('click', (e) => {
 });
 
 // ---------- Transactions table ----------
+let currentTxRows = [];
+
 async function loadTransactionsTable() {
   const month = document.getElementById('txMonthSelect').value;
   const typeParam = txFilterType === 'all' ? '' : `&type=${txFilterType}`;
   const rows = await api(`/api/transactions?month=${month}${typeParam}`);
+  currentTxRows = rows;
   const tbody = document.getElementById('txTableBody');
   const emptyHint = document.getElementById('txEmptyHint');
   if (!rows.length) {
@@ -215,8 +269,10 @@ async function loadTransactionsTable() {
   tbody.querySelectorAll('[data-role="delete"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.closest('tr').dataset.id;
+      const tx = currentTxRows.find((r) => String(r.id) === String(id));
       await api(`/api/transactions/${id}`, { method: 'DELETE' });
-      toast('Операция удалена');
+      pendingUndo = tx ? { date: tx.date, type: tx.type, category_id: tx.category_id, amount: tx.amount, note: tx.note } : null;
+      toast('Операция удалена', false, 2500, pendingUndo ? undoLastDelete : null);
       await loadTransactionsTable();
       refreshDashboard();
     });
@@ -298,8 +354,22 @@ async function loadDashboardMonth() {
   }
 }
 
-async function loadOverview(type, canvasId, insightsId, wordCapital, wordLower) {
-  const data = await api(`/api/summary/overview?months=6&type=${type}&end=${currentMonth}`);
+// «Расходы/Доходы по месяцам» на дашборде всегда показывают текущий календарный
+// год (Янв–Дек, без переключения — смотреть другие годы можно на вкладке
+// «По годам»), 6 месяцев видно, остальные — скроллом внутри .chart-scroll.
+const CURRENT_YEAR = new Date().getFullYear();
+
+function monthShortLabel(key) {
+  const [y, m] = key.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('ru-RU', { month: 'short' });
+}
+
+document.querySelectorAll('[data-role="currentYearLabel"]').forEach((el) => { el.textContent = CURRENT_YEAR; });
+
+// Общий рендер «сумма по категориям x месяц» — переиспользуется дашбордом
+// (текущий год) и вкладкой «По годам» (выбранный год).
+async function renderMonthlyCategoryChart({ endpoint, canvasId, chartSetter, chartGetter }) {
+  const data = await api(endpoint);
   const allCatNames = new Set();
   data.forEach((m) => m.cats.forEach((c) => allCatNames.add(c.name)));
   const catMeta = {};
@@ -315,18 +385,39 @@ async function loadOverview(type, canvasId, insightsId, wordCapital, wordLower) 
     backgroundColor: catMeta[name] || CAT_COLORS_FALLBACK,
   }));
 
-  if (overviewCharts[type]) overviewCharts[type].destroy();
-  overviewCharts[type] = new Chart(document.getElementById(canvasId), {
+  const existing = chartGetter();
+  if (existing) existing.destroy();
+  const canvas = document.getElementById(canvasId);
+  const chart = new Chart(canvas, {
     type: 'bar',
-    data: { labels: data.map((m) => monthLabel(m.month)), datasets },
+    data: { labels: data.map((m) => monthShortLabel(m.month)), datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       scales: { x: { stacked: true }, y: { stacked: true } },
       plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } },
     },
   });
+  chartSetter(chart);
+  // По умолчанию прокручиваем к последним заполненным месяцам — они обычно интереснее первых.
+  const scrollEl = canvas.closest('.chart-scroll');
+  if (scrollEl) scrollEl.scrollLeft = scrollEl.scrollWidth;
 
+  return data;
+}
+
+async function loadOverview(type, canvasId, insightsId, wordCapital, wordLower) {
+  const data = await renderMonthlyCategoryChart({
+    endpoint: `/api/summary/overview?months=12&type=${type}&end=${CURRENT_YEAR}-12`,
+    canvasId,
+    chartSetter: (c) => { overviewCharts[type] = c; },
+    chartGetter: () => overviewCharts[type],
+  });
   renderInsights(document.getElementById(insightsId), computeInsights(data, wordCapital, wordLower));
+}
+
+function refreshOverviewCharts() {
+  loadOverview('expense', 'expenseOverviewChart', 'expense-insights', 'Расходы', 'траты');
+  loadOverview('income', 'incomeOverviewChart', 'income-insights', 'Доходы', 'доходы');
 }
 
 // ---------- Insights (category increase/decrease recommendations) ----------
@@ -437,8 +528,7 @@ function renderInsights(container, { lines, anchorMonth }) {
 
 function refreshDashboard() {
   loadDashboardMonth();
-  loadOverview('expense', 'expenseOverviewChart', 'expense-insights', 'Расходы', 'траты');
-  loadOverview('income', 'incomeOverviewChart', 'income-insights', 'Доходы', 'доходы');
+  refreshOverviewCharts();
 }
 
 // ---------- Export ----------
@@ -461,6 +551,7 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
     const res = await fetch('/api/import', { method: 'POST', body: formData });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'Ошибка импорта');
+    invalidateUndo();
     const parts = [`Добавлено операций: ${body.imported}`];
     if (body.skippedDuplicates) parts.push(`пропущено дублей: ${body.skippedDuplicates}`);
     if (body.newCategories.length) parts.push(`новые категории: ${body.newCategories.join(', ')}`);
@@ -523,6 +614,7 @@ document.getElementById('goalForm').addEventListener('submit', async (e) => {
 
   try {
     await api('/api/goals', { method: 'POST', body: JSON.stringify(payload) });
+    invalidateUndo();
     toast('Цель создана');
     document.getElementById('goalForm').reset();
     document.getElementById('goalExistingCatRow').style.display = 'flex';
@@ -593,6 +685,7 @@ async function loadGoals() {
       if (!amount) return;
       try {
         await api(`/api/goals/${form.dataset.id}/contribute`, { method: 'POST', body: JSON.stringify({ amount }) });
+        invalidateUndo();
         toast('Взнос добавлен');
         await loadGoals();
         await loadTransactionsTable();
@@ -605,11 +698,402 @@ async function loadGoals() {
     btn.addEventListener('click', async () => {
       if (!confirm('Удалить цель? Уже внесённые деньги останутся в категории как есть.')) return;
       await api(`/api/goals/${btn.dataset.id}`, { method: 'DELETE' });
+      invalidateUndo();
       toast('Цель удалена');
       await loadGoals();
     });
   });
 }
+
+// ---------- Years tab ----------
+const YEAR_PALETTE = ['#1a1a18', '#378ADD', '#D85A30', '#1D9E75', '#7F77DD', '#EF9F27', '#D4537E', '#639922', '#0F6E56', '#993556'];
+const MONTH_SHORT_NAMES = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+let allYears = [];
+
+// Один выбранный год — тот же виджет (12 месяцев, скролл), что на дашборде,
+// только год выбирается из выпадающего списка, а не всегда текущий.
+let yearSingleType = 'expense';
+let yearSingleChart = null;
+
+document.getElementById('yearSingleTypeToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-type]');
+  if (!btn) return;
+  yearSingleType = btn.dataset.type;
+  document.querySelectorAll('#yearSingleTypeToggle button').forEach((b) => b.classList.toggle('active', b === btn));
+  loadYearSingleChart();
+});
+document.getElementById('yearSingleSelect').addEventListener('change', loadYearSingleChart);
+
+function populateYearSingleSelect() {
+  const select = document.getElementById('yearSingleSelect');
+  select.innerHTML = allYears.map((y) => `<option value="${y}">${y}</option>`).join('');
+  select.value = allYears.includes(String(CURRENT_YEAR)) ? String(CURRENT_YEAR) : allYears[allYears.length - 1];
+}
+
+async function loadYearSingleChart() {
+  const year = document.getElementById('yearSingleSelect').value;
+  await renderMonthlyCategoryChart({
+    endpoint: `/api/summary/overview?months=12&type=${yearSingleType}&end=${year}-12`,
+    canvasId: 'yearSingleChart',
+    chartSetter: (c) => { yearSingleChart = c; },
+    chartGetter: () => yearSingleChart,
+  });
+}
+
+// Сравнение годов между собой — выбираются чипами (можно любое подмножество,
+// например только 2022 и 2025), каждый выбранный год — своя линия на графике.
+let yearsCompareType = 'expense';
+let yearsCompareChart = null;
+let selectedCompareYears = new Set();
+
+document.getElementById('yearsCompareTypeToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-type]');
+  if (!btn) return;
+  yearsCompareType = btn.dataset.type;
+  document.querySelectorAll('#yearsCompareTypeToggle button').forEach((b) => b.classList.toggle('active', b === btn));
+  loadYearsCompareChart();
+});
+
+function initYearsCompareChips() {
+  const container = document.getElementById('yearsCompareChips');
+  if (selectedCompareYears.size === 0) {
+    // По умолчанию — два последних года: самое частое сравнение («этот год» vs «прошлый»).
+    selectedCompareYears = new Set(allYears.slice(-2));
+  }
+  container.innerHTML = allYears.map((y) => `
+    <label class="year-chip">
+      <input type="checkbox" value="${y}" ${selectedCompareYears.has(y) ? 'checked' : ''}>
+      <span>${y}</span>
+    </label>
+  `).join('');
+  container.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) selectedCompareYears.add(cb.value);
+      else selectedCompareYears.delete(cb.value);
+      loadYearsCompareChart();
+    });
+  });
+}
+
+async function loadYearsCompareChart() {
+  const data = await api(`/api/summary/yearly?type=${yearsCompareType}`);
+  const filtered = data.filter((y) => selectedCompareYears.has(y.year));
+  const datasets = filtered.map((y, i) => {
+    const color = YEAR_PALETTE[i % YEAR_PALETTE.length];
+    return { label: y.year, data: y.monthly, borderColor: color, backgroundColor: color, fill: false, tension: 0.25, pointRadius: 3 };
+  });
+
+  if (yearsCompareChart) yearsCompareChart.destroy();
+  yearsCompareChart = new Chart(document.getElementById('yearsCompareChart'), {
+    type: 'line',
+    data: { labels: MONTH_SHORT_NAMES, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } },
+      scales: { y: { beginAtZero: true } },
+    },
+  });
+}
+
+async function loadYearsTotals() {
+  const rows = await api('/api/summary/yearly-totals');
+  document.getElementById('yearsTotalsBody').innerHTML = rows.map((r) => `
+    <tr>
+      <td>${r.year}</td>
+      <td class="amount-income">${fmt(r.income)}</td>
+      <td class="amount-expense">${fmt(r.expense)}</td>
+      <td>${fmt(r.balance)}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="empty-hint">Нет данных</td></tr>';
+}
+
+async function loadYearsTab() {
+  allYears = await api('/api/summary/years');
+  populateYearSingleSelect();
+  initYearsCompareChips();
+  await Promise.all([loadYearSingleChart(), loadYearsCompareChart(), loadYearsTotals()]);
+}
+
+// ---------- Settings ----------
+document.getElementById('deleteAllDataBtn').addEventListener('click', () => {
+  showConfirmModal({
+    title: 'Удалить все данные?',
+    text: 'Это необратимо удалит все операции, категории и цели за всё время. Категории вернутся к списку по умолчанию. Если нужна копия — сначала сделайте «Экспорт в Excel».',
+    confirmLabel: 'Удалить всё',
+    onConfirm: async () => {
+      try {
+        await api('/api/settings/all-data', { method: 'DELETE' });
+        invalidateUndo();
+        toast('Все данные удалены');
+        await loadCategories();
+        await loadTransactionsTable();
+        await refreshDashboard();
+        await loadGoals();
+      } catch (e) { toast(e.message, true); }
+    },
+  });
+});
+
+// Touch ID/пароль Mac — доступно только в desktop-приложении (см. desktop/src/preload.js).
+// В обычном браузере window.desktopApp не определён — нет доступа к системной авторизации.
+async function initAppLockSetting() {
+  const toggle = document.getElementById('appLockToggle');
+  const row = toggle.closest('.settings-row');
+  const desc = document.getElementById('appLockDesc');
+  const isDesktop = typeof window.desktopApp !== 'undefined' && window.desktopApp.isDesktop;
+
+  if (!isDesktop) {
+    toggle.disabled = true;
+    row.classList.add('disabled');
+    desc.textContent = 'Доступно только в desktop-приложении для macOS — у веб-версии нет доступа к Touch ID/паролю учётной записи Mac.';
+    return;
+  }
+
+  toggle.checked = await window.desktopApp.getAppLockEnabled();
+
+  toggle.addEventListener('change', async () => {
+    const wantEnabled = toggle.checked;
+    if (!wantEnabled) {
+      let result = await window.desktopApp.authenticate('отключить защиту паролем в «Мои финансы»');
+      if (!result.ok) {
+        const pw = prompt('Подтвердите паролем от учётной записи Mac, чтобы выключить защиту:');
+        result = pw ? await window.desktopApp.verifyPassword(pw) : { ok: false };
+      }
+      if (!result.ok) {
+        toggle.checked = true;
+        toast('Не удалось подтвердить личность — защита осталась включена', true);
+        return;
+      }
+    }
+    const ok = await window.desktopApp.setAppLockEnabled(wantEnabled);
+    if (!ok) {
+      toggle.checked = !wantEnabled;
+      toast('Не удалось сохранить настройку', true);
+      return;
+    }
+    toast(wantEnabled ? 'Защита включена — применится при следующем запуске приложения' : 'Защита выключена');
+  });
+}
+
+// ---------- Onboarding tour ----------
+// Флаг «уже показывали» хранится на бэкенде (не в localStorage — у desktop-версии
+// порт бэкенда случайный на каждый запуск, а localStorage привязан к origin
+// http://127.0.0.1:<порт>, так что localStorage-флаг никогда бы не находился заново).
+async function hasSeenOnboarding() {
+  try { return (await api('/api/settings/onboarding-seen')).seen; } catch (e) { return true; }
+}
+async function markOnboardingSeen() {
+  try { await api('/api/settings/onboarding-seen', { method: 'PUT' }); } catch (e) { /* не критично */ }
+}
+
+// Шаги сгруппированы по вкладкам (поле tab переключает её перед показом шага) —
+// см. также CLAUDE.md: при изменении функциональности/вкладок этот список нужно
+// перепроверять и поправлять вместе с кодом.
+const TOUR_STEPS = [
+  // ---------- Дашборд ----------
+  {
+    tab: 'dashboard',
+    selector: '#dashboardMonthCard',
+    title: 'Дашборд — отчёт за месяц',
+    text: 'Здесь сводка по операциям за выбранный месяц: доход, расход, баланс и разбивка расходов по категориям. Месяц переключается стрелками или списком справа.',
+  },
+  {
+    tab: 'dashboard',
+    selector: '#structureCol',
+    title: 'Структура расходов',
+    text: 'Категории на диаграмме можно скрывать — нажмите на категорию в подписях под ней, чтобы временно убрать её и посмотреть на картину без неё. Нажмите ещё раз, чтобы вернуть.',
+  },
+  {
+    tab: 'dashboard',
+    selector: '#expenseChartCard',
+    title: 'Дашборд — расходы по месяцам',
+    text: 'Текущий год целиком: видно 6 месяцев, остальные — прокруткой внутри графика. Ниже — автоматические заметки о заметных изменениях по категориям.',
+  },
+  {
+    selector: '#importBtn',
+    title: 'Импорт из Excel',
+    text: 'Загружает операции из .xlsx — в том числе из файла, который приложение само экспортировало ранее. Повторный импорт безопасен: точные дубли не добавляются.',
+  },
+  {
+    selector: '#exportBtn',
+    title: 'Экспорт в Excel',
+    text: 'Скачивает все операции и сводку по месяцам одним файлом — удобно для бэкапа или переноса на другое устройство через «Импорт».',
+  },
+  // ---------- Операции ----------
+  {
+    tab: 'transactions',
+    selector: '#txForm',
+    title: 'Операции — новая запись',
+    text: 'Здесь можно добавить операцию: тип, дата, категория, сумма и необязательная заметка. Появится сразу в списке ниже.',
+  },
+  {
+    tab: 'transactions',
+    selector: '#txListCard',
+    title: 'Операции — список и удаление',
+    text: 'Здесь можно удалить операцию, отфильтровать список по типу и выбрать месяц. Удалённую по ошибке операцию можно вернуть кнопкой «Отменить» во всплывающем уведомлении или сочетанием Cmd/Ctrl+Z — пока не сделано другое изменение.',
+  },
+  // ---------- Категории ----------
+  {
+    tab: 'categories',
+    selector: '#tab-categories',
+    title: 'Категории',
+    text: 'Здесь можно переименовать категорию, сменить цвет или удалить её — при удалении уже занесённые операции можно перенести на другую категорию.',
+  },
+  // ---------- Цели ----------
+  {
+    tab: 'goals',
+    selector: '#goalForm',
+    title: 'Цели накопления',
+    text: 'Здесь можно завести цель: сумма и необязательный срок — приложение само посчитает, сколько откладывать в месяц. Можно привязать её к отдельной категории, которая на Дашборде и в Excel будет учитываться как часть другой (например, «Сбережения»).',
+  },
+  // ---------- По годам ----------
+  {
+    tab: 'years',
+    selector: '#yearSingleCard',
+    title: 'По годам — операции за год',
+    text: 'Тот же скроллящийся график, что на Дашборде, но здесь можно выбрать любой год из списка, а не только текущий.',
+  },
+  {
+    tab: 'years',
+    selector: '#yearsCompareChips',
+    title: 'По годам — сравнение',
+    text: 'Отметьте любые годы — например, этот и позапрошлый, — чтобы сравнить их месяц к месяцу на одном графике.',
+  },
+  // ---------- Настройки ----------
+  {
+    tab: 'settings',
+    selector: '#tab-settings',
+    title: 'Настройки',
+    text: 'Здесь — защита приложения паролем/Touch ID (в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
+  },
+  {
+    selector: '#helpBtn',
+    title: 'Обзор всегда под рукой',
+    text: 'Нажмите этот значок в любой момент, чтобы посмотреть обзор снова.',
+  },
+];
+
+let tourStepIndex = 0;
+
+function positionTourUI(target) {
+  const rect = target.getBoundingClientRect();
+  const pad = 6;
+  const spotlight = document.getElementById('tourSpotlight');
+  spotlight.style.top = `${rect.top - pad}px`;
+  spotlight.style.left = `${rect.left - pad}px`;
+  spotlight.style.width = `${rect.width + pad * 2}px`;
+  spotlight.style.height = `${rect.height + pad * 2}px`;
+
+  const card = document.getElementById('tourCard');
+  const cardWidth = 300;
+  const margin = 14;
+  // Реальная высота карточки, а не догадка — текст шагов разной длины
+  // (например, у шага про удаление операций текста заметно больше), и с
+  // фиксированной оценкой карточка могла вылезать за нижний край окна.
+  const cardHeight = card.offsetHeight || 200;
+
+  let top = rect.bottom + pad + margin;
+  if (top + cardHeight + margin > window.innerHeight) {
+    top = rect.top - pad - margin - cardHeight;
+  }
+  // На случай, если карточка не помещается ни снизу, ни сверху от цели (маленькое
+  // окно/длинный текст) — прижимаем её к границам видимой области, а не даём вылезти.
+  top = Math.min(Math.max(top, margin), Math.max(margin, window.innerHeight - cardHeight - margin));
+
+  let left = rect.left;
+  if (left + cardWidth + margin > window.innerWidth) left = window.innerWidth - cardWidth - margin;
+  if (left < margin) left = margin;
+  card.style.top = `${top}px`;
+  card.style.left = `${left}px`;
+}
+
+// Переход между шагами асинхронный (переключение таба + скролл) — если разрешить
+// запускать следующий переход до того, как отрисуется предыдущий, они наложатся
+// друг на друга и подпись может отстать от реального шага. Проще всего — не
+// пытаться распутывать гонку постфактум, а просто игнорировать клики по «Далее»/
+// «Назад», пока предыдущий переход ещё не завершился (см. обработчики кнопок ниже).
+let tourBusy = false;
+
+async function goToTourStep(index) {
+  if (index < 0 || tourBusy) return;
+  if (index >= TOUR_STEPS.length) return endTour();
+  tourBusy = true;
+  try {
+    tourStepIndex = index;
+    const step = TOUR_STEPS[index];
+
+    if (step.tab) {
+      const tabBtn = document.querySelector(`.tab-btn[data-tab="${step.tab}"]`);
+      if (tabBtn && !tabBtn.classList.contains('active')) {
+        tabBtn.click();
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+
+    const target = document.querySelector(step.selector);
+    if (!target) { tourBusy = false; return goToTourStep(index + 1); }
+
+    target.scrollIntoView({ block: 'center' });
+    await new Promise((r) => setTimeout(r, 80));
+
+    document.getElementById('tourTitle').textContent = step.title;
+    document.getElementById('tourText').textContent = step.text;
+    document.getElementById('tourStepCount').textContent = `${index + 1} из ${TOUR_STEPS.length}`;
+    document.getElementById('tourPrevBtn').disabled = index === 0;
+    document.getElementById('tourNextBtn').textContent = index === TOUR_STEPS.length - 1 ? 'Готово' : 'Далее';
+
+    // positionTourUI меряет реальную высоту карточки (card.offsetHeight), чтобы не дать
+    // ей вылезти за нижний край окна на шагах с длинным текстом. Сразу после смены
+    // textContent высота ещё может быть не той, что после реального прохода layout —
+    // ждём кадр отрисовки и только потом меряем и позиционируем.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    positionTourUI(target);
+    // Подстраховка: если что-то (например, отрисовка графика) сдвинет разметку
+    // сразу после скролла, поправим позицию ещё раз на следующих кадрах.
+    requestAnimationFrame(() => requestAnimationFrame(() => positionTourUI(target)));
+  } finally {
+    tourBusy = false;
+  }
+}
+
+function startTour() {
+  tourStepIndex = 0;
+  document.getElementById('tourOverlay').hidden = false;
+  window.addEventListener('resize', repositionCurrentTourStep);
+  // scrollIntoView не гарантирует, что скролл не сдвинется ещё раз сам (например,
+  // из-за отрисовки графиков сразу после) — держим подсветку приклеенной к цели
+  // на любой скролл, а не только на явный ресайз окна.
+  window.addEventListener('scroll', repositionCurrentTourStep, { passive: true, capture: true });
+  goToTourStep(0);
+}
+
+function repositionCurrentTourStep() {
+  const step = TOUR_STEPS[tourStepIndex];
+  if (!step) return;
+  const target = document.querySelector(step.selector);
+  if (target) positionTourUI(target);
+}
+
+function endTour() {
+  document.getElementById('tourOverlay').hidden = true;
+  window.removeEventListener('resize', repositionCurrentTourStep);
+  window.removeEventListener('scroll', repositionCurrentTourStep, { capture: true });
+  markOnboardingSeen();
+}
+
+document.getElementById('helpBtn').addEventListener('click', startTour);
+document.getElementById('tourNextBtn').addEventListener('click', () => goToTourStep(tourStepIndex + 1));
+document.getElementById('tourPrevBtn').addEventListener('click', () => goToTourStep(tourStepIndex - 1));
+document.getElementById('tourSkipBtn').addEventListener('click', endTour);
+document.getElementById('tourOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'tourOverlay') endTour();
+});
+document.addEventListener('keydown', (e) => {
+  if (document.getElementById('tourOverlay').hidden) return;
+  if (e.key === 'Escape') endTour();
+  else if (e.key === 'ArrowRight' || e.key === 'Enter') goToTourStep(tourStepIndex + 1);
+  else if (e.key === 'ArrowLeft') goToTourStep(tourStepIndex - 1);
+});
 
 // ---------- Init ----------
 (async function init() {
@@ -619,4 +1103,9 @@ async function loadGoals() {
   await loadTransactionsTable();
   await refreshDashboard();
   await loadGoals();
+  await initAppLockSetting();
+
+  if (!(await hasSeenOnboarding())) {
+    setTimeout(startTour, 400);
+  }
 })();

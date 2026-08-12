@@ -37,12 +37,16 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  # icon: build/icon.icns   # добавьте .icns и раскомментируйте — без него используется дефолтная иконка Electron
+  icon: build/icon.icns
   extendInfo:
     NSHumanReadableCopyright: Copyright © ${author}
 
 dmg:
   sign: false
+  # Имя файла без номера версии — тогда ссылки вида
+  # /releases/latest/download/My-Finances-mac-arm64.dmg (см. README) остаются
+  # рабочими навсегда, без правок при каждом новом релизе.
+  artifactName: 'My-Finances-mac-${arch}.${ext}'
 
 afterSign: scripts/notarize.js
 

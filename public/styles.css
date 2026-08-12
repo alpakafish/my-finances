@@ -4,7 +4,13 @@ body {
   background: #f5f5f3; color: #1a1a18; font-size: 14px; line-height: 1.6;
 }
 h1 { font-size: 22px; font-weight: 600; }
-.header { background: #fff; border-bottom: 1px solid #e5e5e2; padding: 18px 32px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+/* В desktop-приложении окно рамочное (titleBarStyle: hiddenInset) — сам контент
+   доходит до самого верха, и без -webkit-app-region:drag шапку нельзя схватить
+   мышью, чтобы подвинуть окно (кнопки закрыть/свернуть/фулскрин остаются
+   кликабельными сами по себе, это системные элементы поверх контента).
+   В обычном браузере (веб-версия) это свойство просто игнорируется. */
+.header { background: #fff; border-bottom: 1px solid #e5e5e2; padding: 18px 32px 18px 78px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; -webkit-app-region: drag; }
+.header button, .header input, .header a, .header .tooltip-wrap { -webkit-app-region: no-drag; }
 .header p { font-size: 13px; color: #888; margin-top: 2px; }
 .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
 .section-label { font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 12px; }
@@ -42,6 +48,28 @@ h1 { font-size: 22px; font-weight: 600; }
 .chart-wrap { position: relative; width: 100%; }
 .two-col { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; }
 .two-col.is-empty { grid-template-columns: 1fr; }
+
+/* Видимая область (outer) занимает всю ширину карточки; inner вдвое шире (200%) —
+   так в видимой области всегда ровно половина месяцев (~6 из 12), а не заданное
+   число пикселей, и это само подстраивается под ширину экрана. */
+.chart-scroll { overflow-x: auto; width: 100%; padding-bottom: 4px; }
+.chart-scroll-inner { width: 200%; }
+.year-label { font-size: 13px; font-weight: 500; min-width: 42px; text-align: center; }
+
+#yearSingleSelect {
+  border: 1px solid #d5d5d2; border-radius: 6px; padding: 6px 30px 6px 10px; font-family: inherit; font-size: 13px;
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23666' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+}
+
+.year-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.year-chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 20px;
+  border: 1px solid #d5d5d2; font-size: 12.5px; cursor: pointer; user-select: none; background: #fff;
+}
+.year-chip input { accent-color: #1a1a18; margin: 0; }
+.year-chip:has(input:checked) { background: #1a1a18; color: #fff; border-color: #1a1a18; }
 
 .cat-list { display: flex; flex-direction: column; gap: 1px; }
 .cat-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #f0f0ee; }
@@ -108,10 +136,51 @@ td.amount-income { color: #1D9E75; }
 .cat-manage-row input[type="text"] { border: 1px solid #d5d5d2; border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 13px; flex: 1; }
 .cat-manage-row input[type="color"] { width: 32px; height: 32px; border: none; background: none; cursor: pointer; }
 
-.toast { position: fixed; bottom: 20px; right: 20px; background: #1a1a18; color: #fff; padding: 12px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transform: translateY(8px); transition: all 0.25s; pointer-events: none; z-index: 100; }
-.toast.show { opacity: 1; transform: translateY(0); }
+.toast {
+  position: fixed; bottom: 20px; right: 20px; background: #1a1a18; color: #fff;
+  padding: 12px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transform: translateY(8px);
+  transition: all 0.25s; pointer-events: none; z-index: 100;
+  display: flex; align-items: center; gap: 14px;
+}
+.toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .toast.error { background: #D85A30; }
+.toast-undo {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  border: none; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 500; padding: 5px 10px; border-radius: 6px;
+}
+.toast-undo:hover { background: rgba(255,255,255,0.24); }
+.toast-undo[hidden] { display: none; }
 .empty-hint { color: #aaa; font-size: 13px; padding: 20px 0; text-align: center; }
+
+.settings-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.settings-row + .settings-row { margin-top: 16px; padding-top: 16px; border-top: 1px solid #f0f0ee; }
+.settings-row-title { font-size: 14px; font-weight: 500; margin-bottom: 3px; }
+.settings-row-desc { font-size: 12.5px; color: #999; max-width: 480px; }
+.settings-row.disabled .settings-row-title { color: #bbb; }
+
+.switch { position: relative; display: inline-block; width: 40px; height: 24px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch-track {
+  position: absolute; inset: 0; background: #d5d5d2; border-radius: 24px; cursor: pointer; transition: background 0.15s;
+}
+.switch-track::before {
+  content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: transform 0.15s; box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+.switch input:checked + .switch-track { background: #1D9E75; }
+.switch input:checked + .switch-track::before { transform: translateX(16px); }
+.switch input:disabled + .switch-track { opacity: 0.5; cursor: not-allowed; }
+
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(20,20,18,0.4);
+  display: flex; align-items: center; justify-content: center; z-index: 200; padding: 16px;
+}
+.modal-overlay[hidden] { display: none; }
+.modal { background: #fff; border-radius: 12px; padding: 22px 24px; width: 100%; max-width: 380px; box-shadow: 0 12px 40px rgba(0,0,0,0.2); }
+.modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+.modal p { font-size: 13px; color: #555; line-height: 1.6; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 .tooltip-wrap { position: relative; display: inline-block; }
 .tooltip-box {
@@ -142,6 +211,29 @@ td.amount-income { color: #1D9E75; }
 }
 .tooltip-wrap:last-child .tooltip-box::after { left: auto; right: 16px; }
 .tooltip-wrap:hover .tooltip-box { opacity: 1; visibility: visible; transform: translateY(0); }
+
+.icon-btn { width: 36px; padding: 8px 0; text-align: center; font-weight: 600; }
+
+/* ---------- Onboarding tour ---------- */
+.tour-overlay { position: fixed; inset: 0; z-index: 300; }
+.tour-spotlight {
+  position: fixed; border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(15,15,14,0.65);
+  transition: top 0.25s ease, left 0.25s ease, width 0.25s ease, height 0.25s ease;
+  pointer-events: none;
+}
+.tour-card {
+  position: fixed; width: 300px; max-width: calc(100vw - 32px);
+  background: #fff; border-radius: 12px; padding: 18px 20px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.3); z-index: 301;
+  transition: top 0.25s ease, left 0.25s ease;
+}
+.tour-card-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.tour-card-text { font-size: 13px; color: #555; line-height: 1.6; margin-bottom: 14px; }
+.tour-card-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tour-step-count { font-size: 11.5px; color: #aaa; white-space: nowrap; }
+.tour-card-actions { display: flex; gap: 8px; }
+.tour-card-actions .btn[disabled] { opacity: 0.4; cursor: default; }
 
 @media (max-width: 720px) {
   .metrics { grid-template-columns: 1fr 1fr; }

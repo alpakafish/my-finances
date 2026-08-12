@@ -75,6 +75,17 @@ db.exec(`
     start_date TEXT NOT NULL DEFAULT (date('now')),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Настройки самого приложения (не финансовые данные) — сейчас только флаг
+  -- «онбординг уже показывали». Раньше жил в localStorage, но у desktop-версии
+  -- порт бэкенда случайный на каждый запуск (см. server.js), а localStorage
+  -- привязан к origin вида http://127.0.0.1:<порт> — с новым портом на каждом
+  -- запуске флаг оказывался в другом origin и не находился. В БД он переживает
+  -- любой порт.
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 // Миграция: колонка rollup_id могла отсутствовать в базе, созданной до появления целей.
@@ -99,17 +110,28 @@ const DEFAULT_INCOME_CATEGORIES = [
   ['Зарплата', '#1D9E75'], ['Подработка', '#378ADD'], ['Прочий доход', '#888780'],
 ];
 
+function insertDefaultCategories() {
+  const insert = db.prepare('INSERT INTO categories (name, type, color, sort_order) VALUES (?, ?, ?, ?)');
+  DEFAULT_EXPENSE_CATEGORIES.forEach(([name, color], i) => insert.run(name, 'expense', color, i));
+  DEFAULT_INCOME_CATEGORIES.forEach(([name, color], i) => insert.run(name, 'income', color, i));
+}
+
 function seedCategories() {
   const count = db.prepare('SELECT COUNT(*) AS n FROM categories').get().n;
   if (count > 0) return;
-  const insert = db.prepare('INSERT INTO categories (name, type, color, sort_order) VALUES (?, ?, ?, ?)');
-  const seedAll = db.transaction(() => {
-    DEFAULT_EXPENSE_CATEGORIES.forEach(([name, color], i) => insert.run(name, 'expense', color, i));
-    DEFAULT_INCOME_CATEGORIES.forEach(([name, color], i) => insert.run(name, 'income', color, i));
-  });
-  seedAll();
+  db.transaction(insertDefaultCategories)();
 }
 
 seedCategories();
+
+// Настройки → «Удалить все данные»: полностью очищает операции/цели/категории и
+// возвращает категории к значениям по умолчанию (иначе форма добавления операции
+// осталась бы без единой категории на выбор — приложение стало бы нерабочим).
+db.resetAllData = db.transaction(() => {
+  db.exec('DELETE FROM transactions');
+  db.exec('DELETE FROM goals');
+  db.exec('DELETE FROM categories');
+  insertDefaultCategories();
+});
 
 module.exports = db;

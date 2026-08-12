@@ -96,33 +96,59 @@ router.post('/', upload.single('file'), async (req, res) => {
   const newCategories = new Set();
   const sheetsProcessed = [];
 
+  // Общая для обоих форматов часть: найти/создать категорию, пропустить дубль, вставить.
+  function importRow(date, type, amount, note, categoryName) {
+    if (!date || !type || amount === null || amount <= 0) { skippedInvalid++; return; }
+    const fallbackCategory = type === 'expense' ? FALLBACK_EXPENSE_CATEGORY : FALLBACK_INCOME_CATEGORY;
+    const name = categoryName || fallbackCategory;
+
+    const { id: categoryId, created } = findOrCreateCategory(name, type);
+    if (created) newCategories.add(`${name} (${type === 'expense' ? 'расход' : 'доход'})`);
+
+    if (existsStmt.get(date, type, categoryId, amount, note)) { skippedDuplicates++; return; }
+
+    insertStmt.run(date, type, categoryId, amount, note);
+    imported++;
+  }
+
   const runImport = db.transaction(() => {
     workbook.worksheets.forEach((ws) => {
       const name = ws.name.trim();
+
+      // Собственный формат экспорта этого приложения (см. routes/export.js, лист
+      // «Операции») — используется для бэкапа/переноса данных между устройствами:
+      // один лист на оба типа операций, тип в столбце B, 1 строка заголовка.
+      if (name === 'Операции') {
+        sheetsProcessed.push(name);
+        for (let rowNum = 2; rowNum <= ws.rowCount; rowNum++) {
+          const row = ws.getRow(rowNum);
+          const date = cellDate(row.getCell(1));
+          const typeText = cellText(row.getCell(2));
+          const type = typeText === 'Доход' ? 'income' : typeText === 'Расход' ? 'expense' : null;
+          const amount = cellNumber(row.getCell(4));
+          const note = cellText(row.getCell(5));
+          const categoryName = cellText(row.getCell(3));
+          importRow(date, type, amount, note, categoryName);
+        }
+        return;
+      }
+
+      // Старый формат — лист из ручной Excel-таблицы («Траты…»/«Приход…»), которую
+      // вели до этого приложения: один тип на лист, 2 строки заголовка, столбцы
+      // дата/сумма/заметка/категория.
       let type = null;
       if (name.startsWith('Траты')) type = 'expense';
       else if (name.startsWith('Приход')) type = 'income';
-      else return; // "Итого" и прочие служебные листы пропускаем
+      else return; // "Сводка по месяцам", "Итого" и прочие служебные листы пропускаем
 
       sheetsProcessed.push(name);
-      const fallbackCategory = type === 'expense' ? FALLBACK_EXPENSE_CATEGORY : FALLBACK_INCOME_CATEGORY;
-
       for (let rowNum = 3; rowNum <= ws.rowCount; rowNum++) {
         const row = ws.getRow(rowNum);
         const date = cellDate(row.getCell(1));
         const amount = cellNumber(row.getCell(2));
-        if (!date || amount === null || amount <= 0) { skippedInvalid++; continue; }
-
         const note = cellText(row.getCell(3));
-        let categoryName = cellText(row.getCell(4)) || fallbackCategory;
-
-        const { id: categoryId, created } = findOrCreateCategory(categoryName, type);
-        if (created) newCategories.add(`${categoryName} (${type === 'expense' ? 'расход' : 'доход'})`);
-
-        if (existsStmt.get(date, type, categoryId, amount, note)) { skippedDuplicates++; continue; }
-
-        insertStmt.run(date, type, categoryId, amount, note);
-        imported++;
+        const categoryName = cellText(row.getCell(4));
+        importRow(date, type, amount, note, categoryName);
       }
     });
   });

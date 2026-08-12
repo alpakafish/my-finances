@@ -1,10 +1,23 @@
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
-// Фронтенд (public/app.js) сегодня ничего отсюда не использует — вся работа
-// идёт через тот же HTTP API, что и в веб-версии. Оставлено как безопасная,
-// доступная точка расширения (например, для «О программе»), без доступа к
-// Node/файловой системе из страницы (contextIsolation+sandbox включены в main.js).
+// Общий мост для основной страницы приложения (Settings -> переключатель защиты)
+// и для отдельного lock.html (экран входа при запуске). Ни один из методов не
+// даёт доступа к Node/файловой системе из страницы — только точечные IPC-вызовы
+// (contextIsolation+sandbox включены в main.js для обоих окон).
 contextBridge.exposeInMainWorld('desktopApp', {
-  version: process.env.npm_package_version || null,
+  isDesktop: true,
   platform: process.platform,
+
+  // Настройка «Защищать приложение паролем» (Settings)
+  getAppLockEnabled: () => ipcRenderer.invoke('app-lock:get'),
+  setAppLockEnabled: (enabled) => ipcRenderer.invoke('app-lock:set', enabled),
+
+  // Аутентификация — используется и на экране блокировки, и при выключении
+  // защиты из Settings (нужно подтвердить личность перед тем как её снять).
+  canUseTouchID: () => ipcRenderer.invoke('app-lock:can-touchid'),
+  authenticate: (reason) => ipcRenderer.invoke('app-lock:authenticate', reason),
+  verifyPassword: (password) => ipcRenderer.invoke('app-lock:password', password),
+
+  // Только для lock.html: сообщает main-процессу, что можно закрыть экран блокировки.
+  notifyUnlocked: () => ipcRenderer.send('app-lock:unlocked'),
 });

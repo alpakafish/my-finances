@@ -13,6 +13,7 @@ app.use('/api/summary', require('./routes/summary'));
 app.use('/api/export', require('./routes/export'));
 app.use('/api/import', require('./routes/import'));
 app.use('/api/goals', require('./routes/goals'));
+app.use('/api/settings', require('./routes/settings'));
 
 app.use((err, req, res, next) => {
   console.error(err);
@@ -27,10 +28,13 @@ const HOST = '127.0.0.1';
 const server = app.listen(PORT, HOST, () => {
   const actualPort = server.address().port;
   console.log(`Мои финансы запущены: http://${HOST}:${actualPort}`);
-  // Desktop-обёртка (Electron utilityProcess.fork) слушает это сообщение, чтобы
-  // узнать реальный порт и открыть окно. При обычном запуске через `node server.js`
-  // process.send отсутствует, так что для веб-версии это no-op.
+  // Desktop-обёртка слушает это сообщение, чтобы узнать реальный порт и открыть
+  // окно. Обычный `child_process.fork()` даёт process.send(); Electron же
+  // форкует через utilityProcess.fork(), у которого своя IPC-обвязка —
+  // process.parentPort вместо process.send (см. Electron docs: utility-process).
+  // При запуске `node server.js` (веб-версия) обоих нет — это no-op.
   if (process.send) process.send({ type: 'server-ready', port: actualPort });
+  else if (process.parentPort) process.parentPort.postMessage({ type: 'server-ready', port: actualPort });
 });
 
 function shutdown() {

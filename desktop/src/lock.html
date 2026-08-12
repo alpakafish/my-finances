@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Мои финансы — вход</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    background: #f5f5f3; color: #1a1a18;
+    -webkit-app-region: drag;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1c1c1a; color: #f2f2f0; }
+    .card { background: #262624 !important; border-color: #34342f !important; }
+    input { background: #1c1c1a !important; border-color: #3a3a35 !important; color: #f2f2f0 !important; }
+  }
+  .card {
+    -webkit-app-region: no-drag;
+    width: 320px; background: #fff; border: 1px solid #e5e5e2; border-radius: 14px;
+    padding: 28px 26px; text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  p { font-size: 12.5px; color: #999; margin: 0 0 20px; }
+  .btn {
+    width: 100%; font-size: 13px; padding: 10px 14px; border-radius: 8px; border: 1px solid #1a1a18;
+    background: #1a1a18; color: #fff; cursor: pointer; font-family: inherit; font-weight: 500; margin-bottom: 10px;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn.secondary { background: transparent; color: inherit; border-color: #d5d5d2; }
+  input[type="password"] {
+    width: 100%; border: 1px solid #d5d5d2; border-radius: 8px; padding: 10px 12px;
+    font-family: inherit; font-size: 13px; margin-bottom: 10px;
+  }
+  .error { color: #D85A30; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+  .divider { font-size: 11px; color: #bbb; margin: 4px 0 14px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Мои финансы заблокированы</h1>
+    <p>Подтвердите личность, чтобы открыть приложение</p>
+    <div id="touchIdRow" hidden>
+      <button class="btn" id="touchIdBtn">Разблокировать Touch ID</button>
+      <div class="divider">или паролем от Mac</div>
+    </div>
+    <form id="pwForm">
+      <input type="password" id="pwInput" placeholder="Пароль учётной записи Mac" autofocus>
+      <div class="error" id="pwError"></div>
+      <button type="submit" class="btn secondary">Войти</button>
+    </form>
+  </div>
+  <script src="lock.js"></script>
+</body>
+</html>

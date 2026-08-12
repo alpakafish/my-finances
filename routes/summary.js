@@ -50,6 +50,62 @@ router.get('/overview', (req, res) => {
   res.json(list);
 });
 
+// Список лет, за которые есть хоть одна операция, плюс текущий год (даже пустой) —
+// чтобы на вкладке «По годам» и в навигации по годам всегда был как минимум он.
+router.get('/years', (req, res) => {
+  const years = db.prepare(`SELECT DISTINCT substr(date, 1, 4) AS year FROM transactions ORDER BY year`).all().map((r) => r.year);
+  const currentYear = String(new Date().getFullYear());
+  if (!years.includes(currentYear)) years.push(currentYear);
+  years.sort();
+  res.json(years);
+});
+
+// Помесячная разбивка одного типа операций по всем годам, где есть данные —
+// для линейного графика сравнения лет (каждый год — отдельная линия, Янв..Дек).
+router.get('/yearly', (req, res) => {
+  const type = req.query.type === 'income' ? 'income' : 'expense';
+  const rows = db.prepare(`
+    SELECT substr(date, 1, 4) AS year, CAST(substr(date, 6, 2) AS INTEGER) AS month, SUM(amount) AS amount
+    FROM transactions WHERE type = ?
+    GROUP BY year, month
+  `).all(type);
+
+  const byYear = {};
+  rows.forEach((r) => {
+    if (!byYear[r.year]) byYear[r.year] = Array(12).fill(0);
+    byYear[r.year][r.month - 1] = r.amount;
+  });
+
+  const years = Object.keys(byYear).sort();
+  res.json(years.map((year) => ({
+    year,
+    monthly: byYear[year],
+    total: byYear[year].reduce((s, v) => s + v, 0),
+  })));
+});
+
+// Годовые итоги (доход/расход/баланс) — для таблицы под графиком сравнения лет.
+router.get('/yearly-totals', (req, res) => {
+  const rows = db.prepare(`
+    SELECT substr(date, 1, 4) AS year, type, SUM(amount) AS s
+    FROM transactions GROUP BY year, type
+  `).all();
+
+  const byYear = {};
+  rows.forEach((r) => {
+    byYear[r.year] = byYear[r.year] || { income: 0, expense: 0 };
+    byYear[r.year][r.type] = r.s;
+  });
+
+  const years = Object.keys(byYear).sort();
+  res.json(years.map((year) => ({
+    year,
+    income: byYear[year].income,
+    expense: byYear[year].expense,
+    balance: byYear[year].income - byYear[year].expense,
+  })));
+});
+
 router.get('/:month', (req, res) => {
   const { month } = req.params;
   const totalIncome = db.prepare(`
