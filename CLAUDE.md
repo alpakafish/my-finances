@@ -123,6 +123,31 @@ Releases. `desktop/electron-builder.yml` sets `artifactName:
 so the `/releases/latest/download/My-Finances-mac-arm64.dmg` links in
 README stay valid across every future release without edits.
 
+**Gotchas fixed the hard way on the actual first release run** (`v1.0.0`,
+2026-08-12 — all four bit in sequence, one per retry):
+- The repo root **is** `smeta-web` (no nested `smeta-web/` folder) — the
+  workflow originally had `working-directory: smeta-web` everywhere, which
+  fails checkout-relative paths immediately (`npm ci`: "No such file or
+  directory"). Paths in the workflow are relative to the repo root directly
+  (`desktop`, not `smeta-web/desktop`).
+- `${{ secrets.X }}` for a secret that doesn't exist in the repo evaluates to
+  an **empty string**, not "unset" — electron-builder treats a non-null
+  `CSC_LINK=""` as a real (if garbage) cert path, resolves it to `cwd`, and
+  fails ("not a file"). `CSC_IDENTITY_AUTO_DISCOVERY: false` does **not** fix
+  this (that only disables local-keychain auto-discovery, unrelated). The fix:
+  stage secrets under different env var names (`SECRET_CSC_LINK` etc.) and
+  only `export CSC_LINK=...` under the real name inside the `run:` script
+  when the staged value is non-empty — so the variable plain doesn't exist at
+  all when there's no secret, rather than existing-but-empty.
+- The default `GITHUB_TOKEN` only has `contents: read` — publishing a release
+  needs `permissions: contents: write` set explicitly (workflow- or job-level).
+  Without it: `403 Resource not accessible by integration`.
+- electron-builder's GitHub publisher creates the release as a **draft** by
+  default — invisible on `/releases/latest` (and to non-collaborators) until
+  manually published. Fixed going forward via `publish.releaseType: release`
+  in `electron-builder.yml`; the very first release needed one manual
+  `gh release edit v1.0.0 --draft=false`.
+
 **Do NOT create a tag matching `desktop-v*`** unless you actually intend to
 trigger a real signed/published release — that pattern is the CI trigger.
 Use a different prefix (e.g. `backup-YYYY-MM-DD`) for plain safety/checkpoint

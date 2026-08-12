@@ -54,6 +54,10 @@ publish:
   provider: github
   owner: alpakafish
   repo: my-finances
+  # По умолчанию electron-builder публикует релиз черновиком (не виден на
+  # /releases/latest, никто не может скачать) — приходится вручную снимать
+  # пометку. releaseType: release публикует сразу.
+  releaseType: release
 
 # Code signing / notarization читаются electron-builder напрямую из окружения:
 #   CSC_LINK, CSC_KEY_PASSWORD                — сертификат Developer ID Application (.p12, base64) + пароль
