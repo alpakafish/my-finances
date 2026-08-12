@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('desktopApp', {
   // Версия приложения (Settings, футер вкладки)
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),
 
+  // Ручная проверка обновлений (Settings). Диалоги (скачать?/установить?)
+  // показывает main-процесс нативно — этот вызов просто их запускает.
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+
   // Настройка «Защищать приложение паролем» (Settings)
   getAppLockEnabled: () => ipcRenderer.invoke('app-lock:get'),
   setAppLockEnabled: (enabled) => ipcRenderer.invoke('app-lock:set', enabled),

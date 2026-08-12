@@ -23,6 +23,23 @@ autoUpdater.logger = log;
 // Apple Developer Program.
 autoUpdater.autoDownload = false;
 let manualUpdateCheck = false;
+// true once an update has actually finished downloading and is waiting on the
+// user to restart — lets a repeat "Проверить обновления" (menu or Settings)
+// skip straight to the install prompt instead of re-checking/re-downloading.
+let updateReadyToInstall = false;
+
+// Shared by the menu item ("Проверить обновления…") and the Settings tab
+// button (desktop/src/preload.js "update:check") — also what happens if the
+// user dismissed the "скачать?"/"перезапустить?" dialog with "Позже"/"Не
+// сейчас" earlier and wants to pick the flow back up.
+function triggerUpdateCheck() {
+  if (updateReadyToInstall) {
+    showUpdateReadyDialog();
+    return Promise.resolve();
+  }
+  manualUpdateCheck = true;
+  return autoUpdater.checkForUpdates().catch((e) => log.warn('[updater]', e.message));
+}
 
 // Financial data — keep it out of logs.
 log.hooks.push((message) => {
@@ -88,6 +105,13 @@ function showFatalError(title, message) {
 // приложения (в отличие от веб-версии, у которой при желании проверить актуальность
 // своего экземпляра нет смысла — она всегда последняя, т.к. запускается из исходников).
 ipcMain.handle('app:get-version', () => app.getVersion());
+
+// Ручная проверка обновлений из Settings — та же логика, что у пункта меню
+// "Проверить обновления…" (triggerUpdateCheck определена выше, до
+// autoUpdater-обработчиков: если обновление уже скачано и ждёт установки
+// (диалог "Перезапустить сейчас" был закрыт кнопкой "Позже"), сразу
+// предлагает установить, а не качает заново.
+ipcMain.handle('update:check', () => triggerUpdateCheck());
 
 // ---------- Защита паролем/Touch ID ----------
 // IPC-обёртки над desktop/src/auth.js + config.js. Пароль (если введён) идёт
@@ -166,12 +190,7 @@ async function launch() {
     }
 
     createWindow(port);
-    Menu.setApplicationMenu(buildMenu({
-      onCheckForUpdates: () => {
-        manualUpdateCheck = true;
-        autoUpdater.checkForUpdates().catch((e) => log.warn('[updater]', e.message));
-      },
-    }));
+    Menu.setApplicationMenu(buildMenu({ onCheckForUpdates: triggerUpdateCheck }));
     // app-update.yml существует только в билдах, собранных с --publish (настоящий релиз);
     // в локальных dev-сборках (--dir/без publish) его нет — не дёргаем апдейтер впустую.
     const updateConfigExists = fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'));
@@ -209,6 +228,18 @@ process.on('uncaughtException', (err) => {
 
 autoUpdater.on('error', (err) => log.error('[updater:error]', err.message));
 
+function showUpdateReadyDialog() {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Обновление готово',
+    message: 'Новая версия My Finances загружена и будет установлена при перезапуске.',
+    detail: 'Ваши данные (база данных в Application Support) обновление не затрагивает.',
+    buttons: ['Перезапустить сейчас', 'Позже'],
+  }).then(({ response }) => {
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+}
+
 autoUpdater.on('update-available', (info) => {
   dialog.showMessageBox(mainWindow, {
     type: 'info',
@@ -232,13 +263,6 @@ autoUpdater.on('update-not-available', () => {
 });
 
 autoUpdater.on('update-downloaded', () => {
-  dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    title: 'Обновление готово',
-    message: 'Новая версия My Finances загружена и будет установлена при перезапуске.',
-    detail: 'Ваши данные (база данных в Application Support) обновление не затрагивает.',
-    buttons: ['Перезапустить сейчас', 'Позже'],
-  }).then(({ response }) => {
-    if (response === 0) autoUpdater.quitAndInstall();
-  });
+  updateReadyToInstall = true;
+  showUpdateReadyDialog();
 });

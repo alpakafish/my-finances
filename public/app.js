@@ -967,6 +967,35 @@ async function initAppVersion() {
   });
 }
 
+// Ручная проверка обновлений — доступно только в desktop-версии (см. desktop/src/main.js
+// triggerUpdateCheck): скачать/установить предлагают нативные диалоги самого приложения,
+// эта кнопка их просто запускает — в т.ч. если раньше нажали «Позже»/«Не сейчас».
+function initUpdateCheckSetting() {
+  const btn = document.getElementById('checkUpdatesBtn');
+  const row = btn.closest('.settings-row');
+  const desc = document.getElementById('updateCheckDesc');
+  const isDesktop = typeof window.desktopApp !== 'undefined' && window.desktopApp.isDesktop;
+
+  if (!isDesktop) {
+    btn.disabled = true;
+    row.classList.add('disabled');
+    desc.textContent = 'Доступно только в приложении для Mac — у веб-версии нет отдельных обновлений, она всегда работает из актуального кода.';
+    return;
+  }
+
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = 'Проверяю…';
+    try {
+      await window.desktopApp.checkForUpdates();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
+}
+
 // ---------- Onboarding tour ----------
 // Флаг «уже показывали» хранится на бэкенде (не в localStorage — у desktop-версии
 // порт бэкенда случайный на каждый запуск, а localStorage привязан к origin
@@ -1056,7 +1085,7 @@ const TOUR_STEPS = [
     tab: 'settings',
     selector: '#tab-settings',
     title: 'Настройки',
-    text: 'Здесь — защита приложения паролем/Touch ID (в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
+    text: 'Здесь — защита приложения паролем/Touch ID, ручная проверка обновлений (обе — в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
   },
   {
     selector: '#helpBtn',
@@ -1197,6 +1226,7 @@ document.addEventListener('keydown', (e) => {
   await loadGoals();
   await initAppLockSetting();
   await initAppVersion();
+  initUpdateCheckSetting();
 
   if (!(await hasSeenOnboarding())) {
     setTimeout(startTour, 400);
