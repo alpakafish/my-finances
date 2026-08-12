@@ -53,9 +53,18 @@ class Backend {
       });
       this.child = child;
 
+      // 30s, not 10s: on a fresh Windows install (unsigned build — no paid code
+      // signing cert, see CLAUDE.md) Windows Defender/SmartScreen can spend
+      // several seconds scanning the just-downloaded/installed exe and its
+      // node_modules the first time anything in that folder actually runs,
+      // which can blow straight through a tight timeout even though the
+      // backend itself starts fine. Found 2026-08-12: user hit "did not
+      // report readiness within 10s" once right after install, then the app
+      // launched normally on every retry (the exe was already Defender-scanned
+      // by then).
       const onReadyTimeout = setTimeout(() => {
-        reject(new Error('Backend did not report readiness within 10s'));
-      }, 10_000);
+        reject(new Error('Backend did not report readiness within 30s'));
+      }, 30_000);
 
       child.stdout?.on('data', (d) => log.info(`[backend] ${d.toString().trim()}`));
       child.stderr?.on('data', (d) => log.error(`[backend:err] ${d.toString().trim()}`));

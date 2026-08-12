@@ -227,7 +227,25 @@ process.on('uncaughtException', (err) => {
   if (!quitting) showFatalError('Непредвиденная ошибка', err.message);
 });
 
-autoUpdater.on('error', (err) => log.error('[updater:error]', err.message));
+// Ручная проверка (кнопка "Проверить" в Настройках/пункт меню) должна дать
+// пользователю хоть какой-то ответ, даже если сама проверка не удалась —
+// раньше при ошибке (например, сеть недоступна, или на Windows не удалось
+// прочитать app-update.yml — ни разу не проверялось до первого Windows-релиза,
+// см. CLAUDE.md) не показывалось вообще ничего, и с той же кнопки "Проверить"
+// не было видно, работает она или нет. Автоматическую проверку при запуске
+// (manualUpdateCheck === false) не прерываем диалогом — там тихий лог, как и
+// раньше, это ожидаемо для фоновой проверки.
+autoUpdater.on('error', (err) => {
+  log.error('[updater:error]', err.message);
+  if (!manualUpdateCheck) return;
+  manualUpdateCheck = false;
+  dialog.showMessageBox(mainWindow, {
+    type: 'error',
+    title: 'Не удалось проверить обновления',
+    message: 'Проверка обновлений не удалась.',
+    detail: err.message,
+  });
+});
 
 function showUpdateReadyDialog() {
   dialog.showMessageBox(mainWindow, {
