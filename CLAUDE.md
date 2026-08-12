@@ -106,6 +106,68 @@ one.
   before claiming a desktop-side fix works" above. Fix: wrap that kind of
   require in try/catch with a safe fallback rather than assuming it's there.
 
+**`window.prompt()` does not render anything in an Electron `BrowserWindow` —
+found via a real user report on v1.0.11, 2026-08-12.** Unlike
+`window.alert()`/`window.confirm()` (which Electron does implement as native
+dialogs), `window.prompt()` for free-text input is a known long-standing gap
+— calling it produces no visible UI at all, not an error, just nothing (see
+electron/electron#40341). `public/app.js`'s "disable app-lock" flow used to
+call `window.prompt()` as a fallback when Touch ID wasn't available/declined
+— this silently did nothing on Windows (which has no Touch ID at all, so
+that fallback path is the *only* path there, hit on every attempt) and
+likely never really worked reliably on Mac either (just went unnoticed
+because most Mac testers have Touch ID and never hit the fallback). Fixed by
+removing `window.prompt()`/`window.confirm()`-style renderer dialogs from
+this app's playbook entirely: `desktop/src/main.js`'s `showLockScreen()`
+(the existing native password/Touch ID window used for launch-time unlock)
+was generalized into `showAuthWindow({mode, reason})`, reused via a new
+`app-lock:confirm-identity` IPC handler for the disable-lock confirmation
+too (mode `'confirm'` adds a Cancel button via `lock.html`/`lock.js`, mode
+`'unlock'` is the original launch-time behavior unchanged). `public/app.js`
+now just calls `window.desktopApp.confirmIdentity(reason)` and gets a plain
+boolean — no dialog logic in the renderer at all. **General lesson: never
+reach for `window.prompt()`/`window.confirm()` in this codebase's Electron
+renderer code — they don't render.** `alert()` does work but wasn't used
+here regardless, in favor of the existing `toast()` pattern.
+
+**Windows icon looked noticeably smaller than other apps' icons (taskbar,
+Start menu, desktop shortcut) — user report, 2026-08-12.** `build/icon.png`
+(shared source electron-builder converts to both `.icns` and `.ico`) is
+drawn with generous transparent padding around the circular badge — normal
+for macOS icons (Big Sur+ "safe zone" convention keeps content around ~78%
+of the canvas so the OS's own rounded-square puffiness reads consistently
+across apps) but Windows has no such convention, so the same PNG reused
+as-is for `.ico` conversion just looks under-filled/small next to other
+Windows icons. Fixed with a Windows-only icon source,
+`desktop/build/icon-windows.png` — same artwork, cropped to the alpha
+channel's bounding box and rescaled to fill ~90% of a 1024×1024 canvas
+instead of ~78%, `win.icon` in `electron-builder.yml` points at it instead
+of the shared `build/icon.png` (`mac.icon` still points at `build/icon.icns`,
+untouched). Regenerate after any edit to the source `build/icon.png` with:
+```bash
+python3 -c "
+from PIL import Image
+im = Image.open('build/icon.png')
+bbox = im.getbbox()
+cropped = im.crop(bbox)
+cw, ch = cropped.size
+canvas_size = 1024
+fill_fraction = 0.92
+scale = (canvas_size * fill_fraction) / max(cw, ch)
+new_w, new_h = round(cw * scale), round(ch * scale)
+resized = cropped.resize((new_w, new_h), Image.LANCZOS)
+canvas = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
+x, y = (canvas_size - new_w) // 2, (canvas_size - new_h) // 2
+canvas.paste(resized, (x, y), resized)
+canvas.save('build/icon-windows.png')
+"
+```
+No checked-in script for this (needs Pillow, a dependency the repo
+otherwise has zero use for) — it's a rare, manual, one-off regeneration, not
+worth a permanent `sharp`/`jimp` devDependency (the latter would also cut
+against the whole `node:sqlite`-over-`better-sqlite3` "avoid native/extra
+toolchain deps" stance elsewhere in this file).
+
 ## Testing
 
 - **Never** run a test server against the default `DATA_DIR` (`./data/`) —

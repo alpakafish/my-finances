@@ -54,9 +54,18 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  # Явный icon.png (1024x1024) — electron-builder сам конвертирует его в .ico
-  # (getOrConvertIcon в app-builder-lib), отдельный build/icon.ico не нужен.
-  icon: build/icon.png
+  # Отдельный источник иконки для Windows (не build/icon.png, который делит с
+  # mac.icon): исходный icon.png нарисован с большими прозрачными полями
+  # вокруг круглого значка — так принято для иконок macOS (safe zone), но на
+  # Windows/в панели задач те же поля делают значок визуально мельче, чем у
+  # соседних иконок (жалоба пользователя, 2026-08-12). icon-windows.png — тот
+  # же значок, обрезанный по границам непрозрачных пикселей (bbox по альфа-
+  # каналу) и отмасштабированный так, чтобы кружок занимал ~90% канваса
+  # вместо ~78% (см. одноразовую команду в CLAUDE.md, если понадобится
+  # перегенерировать после правки исходного icon.png) — mac-иконку не
+  # трогает. electron-builder сам конвертирует PNG 1024x1024 в .ico
+  # (getOrConvertIcon в app-builder-lib) — отдельный build/icon.ico не нужен.
+  icon: build/icon-windows.png
 
 nsis:
   oneClick: false
