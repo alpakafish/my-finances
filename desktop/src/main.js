@@ -123,16 +123,24 @@ ipcMain.handle('app-lock:set', (event, enabled) => { config.setAppLockEnabled(en
 ipcMain.handle('app-lock:can-touchid', () => auth.canUseTouchID());
 ipcMain.handle('app-lock:authenticate', (event, reason) => auth.promptTouchID(reason || 'Открыть «Мои финансы»'));
 ipcMain.handle('app-lock:password', (event, password) => auth.verifyPassword(password));
+// Подтверждение личности перед действием вроде выключения защиты (Settings) —
+// тот же экран lock.html/lock.js, что и вход при запуске, в режиме 'confirm'
+// (с кнопкой "Отмена"). Раньше это делалось через authenticate() +
+// window.prompt() прямо в public/app.js — Electron не показывает
+// window.prompt() в BrowserWindow вообще, так что на Windows (где нет Touch
+// ID и путь с prompt() срабатывал всегда) экран просто не появлялся, не
+// давая никакой обратной связи (2026-08-12, см. CLAUDE.md).
+ipcMain.handle('app-lock:confirm-identity', (event, reason) => showAuthWindow({ mode: 'confirm', reason }));
 
-function showLockScreen() {
+function showAuthWindow({ mode = 'unlock', reason = '' } = {}) {
   return new Promise((resolve) => {
     const lockWin = new BrowserWindow({
       width: 380,
-      height: 380,
+      height: mode === 'confirm' ? 430 : 380,
       resizable: false,
       minimizable: false,
       maximizable: false,
-      title: 'Мои финансы — вход',
+      title: mode === 'confirm' ? 'Мои финансы — подтверждение' : 'Мои финансы — вход',
       backgroundColor: '#f5f5f3',
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
@@ -144,7 +152,7 @@ function showLockScreen() {
     });
     lockWin.setMenuBarVisibility(false);
     lockWin.once('ready-to-show', () => lockWin.show());
-    lockWin.loadFile(path.join(__dirname, 'lock.html'));
+    lockWin.loadFile(path.join(__dirname, 'lock.html'), { query: { mode, reason } });
 
     let resolved = false;
     const onUnlocked = () => {
@@ -160,6 +168,10 @@ function showLockScreen() {
       if (!resolved) { resolved = true; resolve(false); }
     });
   });
+}
+
+function showLockScreen() {
+  return showAuthWindow({ mode: 'unlock' });
 }
 
 async function launch() {

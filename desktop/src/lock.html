@@ -40,17 +40,18 @@
 </head>
 <body>
   <div class="card">
-    <h1>Мои финансы заблокированы</h1>
-    <p>Подтвердите личность, чтобы открыть приложение</p>
+    <h1 id="titleText">Мои финансы заблокированы</h1>
+    <p id="subtitleText">Подтвердите личность, чтобы открыть приложение</p>
     <div id="touchIdRow" hidden>
       <button class="btn" id="touchIdBtn">Разблокировать Touch ID</button>
-      <div class="divider">или паролем от Mac</div>
+      <div class="divider" id="divider">или паролем</div>
     </div>
     <form id="pwForm">
-      <input type="password" id="pwInput" placeholder="Пароль учётной записи Mac" autofocus>
+      <input type="password" id="pwInput" placeholder="Пароль учётной записи" autofocus>
       <div class="error" id="pwError"></div>
       <button type="submit" class="btn secondary">Войти</button>
     </form>
+    <button class="btn secondary" id="cancelBtn" hidden>Отмена</button>
   </div>
   <script src="lock.js"></script>
 </body>

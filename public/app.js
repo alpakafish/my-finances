@@ -901,8 +901,9 @@ document.getElementById('deleteAllDataBtn').addEventListener('click', () => {
   });
 });
 
-// Touch ID/пароль Mac — доступно только в desktop-приложении (см. desktop/src/preload.js).
-// В обычном браузере window.desktopApp не определён — нет доступа к системной авторизации.
+// Touch ID (Mac)/пароль учётной записи (Mac или Windows) — доступно только в
+// desktop-приложении (см. desktop/src/preload.js). В обычном браузере
+// window.desktopApp не определён — нет доступа к системной авторизации.
 async function initAppLockSetting() {
   const toggle = document.getElementById('appLockToggle');
   const row = toggle.closest('.settings-row');
@@ -912,7 +913,7 @@ async function initAppLockSetting() {
   if (!isDesktop) {
     toggle.disabled = true;
     row.classList.add('disabled');
-    desc.textContent = 'Доступно только в desktop-приложении для macOS — у веб-версии нет доступа к Touch ID/паролю учётной записи Mac.';
+    desc.textContent = 'Доступно только в desktop-приложении (Mac или Windows) — у веб-версии нет доступа к системной авторизации.';
     return;
   }
 
@@ -921,12 +922,8 @@ async function initAppLockSetting() {
   toggle.addEventListener('change', async () => {
     const wantEnabled = toggle.checked;
     if (!wantEnabled) {
-      let result = await window.desktopApp.authenticate('отключить защиту паролем в «Мои финансы»');
-      if (!result.ok) {
-        const pw = prompt('Подтвердите паролем от учётной записи Mac, чтобы выключить защиту:');
-        result = pw ? await window.desktopApp.verifyPassword(pw) : { ok: false };
-      }
-      if (!result.ok) {
+      const confirmed = await window.desktopApp.confirmIdentity('Подтвердите личность, чтобы отключить защиту паролем');
+      if (!confirmed) {
         toggle.checked = true;
         toast('Не удалось подтвердить личность — защита осталась включена', true);
         return;
@@ -979,7 +976,7 @@ function initUpdateCheckSetting() {
   if (!isDesktop) {
     btn.disabled = true;
     row.classList.add('disabled');
-    desc.textContent = 'Доступно только в приложении для Mac — у веб-версии нет отдельных обновлений, она всегда работает из актуального кода.';
+    desc.textContent = 'Доступно только в desktop-приложении (Mac или Windows) — у веб-версии нет отдельных обновлений, она всегда работает из актуального кода.';
     return;
   }
 
