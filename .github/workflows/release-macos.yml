@@ -42,6 +42,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Секреты, которых нет в репозитории, GitHub Actions подставляет как
+          # пустую строку, а не убирает переменную — пустой CSC_LINK electron-builder
+          # ошибочно принимает за путь к сертификату (резолвит в cwd, падает "not a
+          # file"). CSC_IDENTITY_AUTO_DISCOVERY=false отключает попытку авто-поиска
+          # сертификата и чинит это; на реальную подпись через непустой CSC_LINK не
+          # влияет — тот путь electron-builder всегда обрабатывает отдельно.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder --mac --arm64 --x64 --publish always
 
       - name: Upload build artifacts (debug copy, in addition to the Release)
