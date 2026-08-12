@@ -9,6 +9,13 @@ on:
       - 'desktop-v*'
   workflow_dispatch: {}
 
+# GITHUB_TOKEN по умолчанию имеет только contents:read — electron-builder
+# падал с 403 "Resource not accessible by integration" при попытке создать
+# релиз. contents:write даёт токену право создавать релизы и загружать в них
+# файлы (только в этом репозитории, только для этого workflow).
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
