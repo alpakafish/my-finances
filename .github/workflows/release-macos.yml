@@ -12,9 +12,6 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-    defaults:
-      run:
-        working-directory: smeta-web
     steps:
       - uses: actions/checkout@v4
 
@@ -22,22 +19,22 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install backend deps (shared with legacy web app)
+      - name: Install backend deps (shared with web version)
         run: npm ci
 
       - name: Backend smoke test
         run: npm test --if-present
 
       - name: Install desktop deps
-        working-directory: smeta-web/desktop
+        working-directory: desktop
         run: npm ci
 
       - name: Desktop unit tests
-        working-directory: smeta-web/desktop
+        working-directory: desktop
         run: npm test --if-present
 
       - name: Build + sign + notarize + publish
-        working-directory: smeta-web/desktop
+        working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
@@ -52,6 +49,6 @@ jobs:
         with:
           name: my-finances-macos
           path: |
-            smeta-web/desktop/dist/*.dmg
-            smeta-web/desktop/dist/*.zip
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
           if-no-files-found: error
