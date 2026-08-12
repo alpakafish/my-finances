@@ -73,6 +73,22 @@ one.
   on every launch instead. Fix: persist it server-side (SQLite `app_settings`
   key/value table, or a file under `DATA_DIR`) via a small API route instead —
   see `/api/settings/onboarding-seen` in `routes/settings.js` for the pattern.
+- **A shared `routes/*.js` file doing `require('../package.json')` (or
+  reading any other repo-root-only file) crash-loops the whole desktop
+  backend on startup, silently — not just that one route.** Desktop's
+  `extraResources` (`electron-builder.yml`) copies `server.js`, `db.js`,
+  `routes/`, `public/`, and `node_modules/` into `Resources/app/`, but *not*
+  `package.json` — it doesn't need it for anything else. A module-level
+  `require` that assumes it's there throws at load time, before Express even
+  starts, and the desktop backend's restart-on-crash logic just gives up
+  after a few attempts (`crash-looped, giving up on restart` in
+  `main.log`) — found via `/api/settings/version` (`routes/settings.js`),
+  2026-08-12. The `npm test` desktop smoke test does **not** catch this: it
+  runs `../server.js` straight from the repo (dev mode), where the root
+  `package.json` genuinely is one level up — only a real packaged `--dir`
+  build + actual launch exposes the missing-file problem, per "Rebuild
+  before claiming a desktop-side fix works" above. Fix: wrap that kind of
+  require in try/catch with a safe fallback rather than assuming it's there.
 
 ## Testing
 

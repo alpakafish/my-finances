@@ -83,6 +83,12 @@ function showFatalError(title, message) {
   dialog.showErrorBox(title, message);
 }
 
+// app.getVersion() читает "version" из desktop/package.json, которую электрон-билдер
+// зашивает в бандл при сборке — всегда совпадает с фактической версией установленного
+// приложения (в отличие от веб-версии, у которой при желании проверить актуальность
+// своего экземпляра нет смысла — она всегда последняя, т.к. запускается из исходников).
+ipcMain.handle('app:get-version', () => app.getVersion());
+
 // ---------- Защита паролем/Touch ID ----------
 // IPC-обёртки над desktop/src/auth.js + config.js. Пароль (если введён) идёт
 // напрямую в auth.verifyMacPassword и никогда не логируется и не сохраняется —

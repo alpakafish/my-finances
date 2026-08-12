@@ -942,6 +942,31 @@ async function initAppLockSetting() {
   });
 }
 
+// Версия приложения — в desktop-версии через Electron (app.getVersion(), точная версия
+// собранного бандла), в веб-версии — с бэкенда (version из корневого package.json).
+async function initAppVersion() {
+  const textEl = document.getElementById('appVersionText');
+  const isDesktop = typeof window.desktopApp !== 'undefined' && window.desktopApp.isDesktop;
+  let version;
+  try {
+    version = isDesktop ? await window.desktopApp.getAppVersion() : (await api('/api/settings/version')).version;
+  } catch (e) {
+    textEl.textContent = 'Версия неизвестна';
+    return;
+  }
+  textEl.textContent = `Версия ${version}`;
+  textEl.dataset.version = version;
+
+  document.getElementById('copyVersionBtn').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(version);
+      toast('Скопировано');
+    } catch (e) {
+      toast('Не удалось скопировать', true);
+    }
+  });
+}
+
 // ---------- Onboarding tour ----------
 // Флаг «уже показывали» хранится на бэкенде (не в localStorage — у desktop-версии
 // порт бэкенда случайный на каждый запуск, а localStorage привязан к origin
@@ -1171,6 +1196,7 @@ document.addEventListener('keydown', (e) => {
   await refreshDashboard();
   await loadGoals();
   await initAppLockSetting();
+  await initAppVersion();
 
   if (!(await hasSeenOnboarding())) {
     setTimeout(startTour, 400);

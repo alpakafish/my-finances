@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld('desktopApp', {
   isDesktop: true,
   platform: process.platform,
 
+  // Версия приложения (Settings, футер вкладки)
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+
   // Настройка «Защищать приложение паролем» (Settings)
   getAppLockEnabled: () => ipcRenderer.invoke('app-lock:get'),
   setAppLockEnabled: (enabled) => ipcRenderer.invoke('app-lock:set', enabled),

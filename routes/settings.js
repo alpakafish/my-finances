@@ -3,6 +3,18 @@ const db = require('../db');
 
 const router = express.Router();
 
+// Версия для веб-версии (desktop берёт свою версию через Electron app.getVersion(),
+// см. desktop/src/main.js — там она читается из desktop/package.json, а не отсюда).
+// package.json не входит в extraResources desktop-сборки (не нужен ей), поэтому
+// require не должен падать при отсутствии файла — иначе крашится весь бэкенд ещё
+// на старте, хотя этот роут для desktop и не используется.
+let webVersion = 'unknown';
+try { webVersion = require('../package.json').version; } catch (e) { /* нормально для desktop-сборки */ }
+
+router.get('/version', (req, res) => {
+  res.json({ version: webVersion });
+});
+
 router.delete('/all-data', (req, res) => {
   db.resetAllData();
   res.status(204).end();
