@@ -146,6 +146,19 @@ one.
   than the root test's fire-and-forget `kill()`), but got the same
   `maxRetries`/`retryDelay` added anyway as a cheap safety net against the
   same "OS hasn't fully released the handle yet" race.
+- **`desktop/test/launch.test.js` asserted the app exits with code `0` after
+  `child.kill('SIGTERM')` — true on macOS/Linux, but always `null` on
+  Windows.** Found right after the EBUSY fix above, same first
+  `windows-latest` CI run. Windows has no real POSIX signal delivery:
+  `child.kill('SIGTERM')` there is emulated via `TerminateProcess`, a hard
+  kill with no graceful-shutdown path, so Node always reports `exitCode:
+  null` (never `0`) regardless of what the app itself would have done given
+  an actual chance to shut down. macOS/Linux get `0` because Electron
+  installs its own SIGTERM handler that runs a real `app.quit()` before
+  exiting. Fix: `assert.equal(exitCode, process.platform === 'win32' ? null
+  : 0)` — the test still verifies the process actually stops (doesn't hang),
+  just with the platform-correct expected value instead of assuming POSIX
+  semantics everywhere.
 
 ## Building & releasing
 

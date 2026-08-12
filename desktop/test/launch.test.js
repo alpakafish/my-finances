@@ -47,7 +47,12 @@ test('app boots, seeds db in userData, shuts down cleanly', async () => {
     child.on('exit', (code) => resolve(code));
     child.kill('SIGTERM');
   });
-  assert.equal(exitCode, 0);
+  // Windows has no real POSIX signals — child.kill('SIGTERM') there forcibly
+  // terminates the process (TerminateProcess), which Node always reports as
+  // exitCode: null (no graceful app.quit() exit path the way Electron's
+  // built-in SIGTERM handler gives on macOS/Linux, which is what code 0
+  // below verifies there). Found on the first windows-latest CI run, 2026-08-12.
+  assert.equal(exitCode, process.platform === 'win32' ? null : 0);
 
   // maxRetries/retryDelay: on Windows the OS can hold the file handle on smeta.db
   // for a brief moment even after the child process's 'exit' event has fired —
