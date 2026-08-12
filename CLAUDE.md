@@ -159,6 +159,29 @@ one.
   : 0)` — the test still verifies the process actually stops (doesn't hang),
   just with the platform-correct expected value instead of assuming POSIX
   semantics everywhere.
+- **Turning OFF app-lock (Settings toggle) silently did nothing on Windows —
+  found via a real user report on v1.0.10, not caught by any test.**
+  `public/app.js`'s disable-flow (`initAppLockSetting`, search "выключить
+  защиту паролем") does `await window.desktopApp.authenticate(...)` first and
+  only falls back to a password prompt if that resolves `{ok:false}`. But
+  `auth.js`'s `promptTouchID()` called `systemPreferences.promptTouchID`
+  unconditionally, with no availability guard — that Electron API is
+  macOS-only and doesn't exist on Windows at all, so the call threw
+  synchronously (`TypeError`), `ipcMain.handle` turned that into a **rejected**
+  IPC promise (not a resolved `{ok:false}`), and the `await` in the
+  un-try/catch'd renderer event handler died right there — never reaching the
+  password-prompt fallback or the `setAppLockEnabled()` call, with no error
+  toast either (the whole async function just aborted). From the user's side:
+  the checkbox visually unchecks (native DOM state) but the underlying config
+  never changes, so the lock screen keeps appearing on every launch, and
+  there's zero on-screen indication of *why*. Fix: `promptTouchID()` now
+  checks `canUseTouchID()` first (same guard `canUseTouchID()` itself already
+  had) and resolves `{ok:false, method:'touchid', error:'Touch ID недоступен'}`
+  immediately on platforms without it, instead of assuming the API exists —
+  lets `app.js`'s existing password-prompt fallback run as designed. Good
+  reminder that `canUseTouchID()` being guarded doesn't mean every caller of
+  the *other* Touch ID function is safe — check each cross-platform Electron
+  API individually, not just the "is it available" probe.
 
 ## Building & releasing
 

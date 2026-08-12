@@ -9,6 +9,18 @@ function canUseTouchID() {
 }
 
 function promptTouchID(reason) {
+  // systemPreferences.promptTouchID is macOS-only — on Windows it doesn't exist
+  // at all, so calling it unconditionally throws synchronously (TypeError),
+  // which ipcMain.handle turns into a *rejected* IPC invoke promise instead of
+  // the {ok:false} this function is supposed to always resolve with. That
+  // silently broke public/app.js's "выключить защиту паролем" flow on Windows
+  // (2026-08-12): it awaits authenticate() first and only falls back to the
+  // password prompt if that resolves with ok:false — an unhandled rejection
+  // there aborts the whole toggle handler before the fallback or
+  // setAppLockEnabled() ever runs, so the toggle looked like it did nothing.
+  if (!canUseTouchID()) {
+    return Promise.resolve({ ok: false, method: 'touchid', error: 'Touch ID недоступен' });
+  }
   return systemPreferences.promptTouchID(reason).then(
     () => ({ ok: true, method: 'touchid' }),
     (e) => ({ ok: false, method: 'touchid', error: e.message }),
