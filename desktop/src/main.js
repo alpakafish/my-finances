@@ -12,6 +12,12 @@ log.initialize();
 log.transports.file.level = 'info';
 log.transports.console.level = app.isPackaged ? false : 'debug';
 autoUpdater.logger = log;
+// По умолчанию electron-updater скачивает найденное обновление сразу, без
+// вопроса — пользователь узнаёт об этом только постфактум, диалогом
+// "перезапустить сейчас/позже". Спрашиваем явно перед скачиванием: качаем
+// только после подтверждения (см. 'update-available' ниже).
+autoUpdater.autoDownload = false;
+let manualUpdateCheck = false;
 
 // Financial data — keep it out of logs.
 log.hooks.push((message) => {
@@ -149,12 +155,17 @@ async function launch() {
     }
 
     createWindow(port);
-    Menu.setApplicationMenu(buildMenu({ onCheckForUpdates: () => autoUpdater.checkForUpdatesAndNotify() }));
+    Menu.setApplicationMenu(buildMenu({
+      onCheckForUpdates: () => {
+        manualUpdateCheck = true;
+        autoUpdater.checkForUpdates().catch((e) => log.warn('[updater]', e.message));
+      },
+    }));
     // app-update.yml существует только в билдах, собранных с --publish (настоящий релиз);
     // в локальных dev-сборках (--dir/без publish) его нет — не дёргаем апдейтер впустую.
     const updateConfigExists = fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'));
     if (app.isPackaged && updateConfigExists) {
-      autoUpdater.checkForUpdatesAndNotify().catch((e) => log.warn('[updater]', e.message));
+      autoUpdater.checkForUpdates().catch((e) => log.warn('[updater]', e.message));
     }
   } catch (e) {
     showFatalError(
@@ -186,6 +197,29 @@ process.on('uncaughtException', (err) => {
 });
 
 autoUpdater.on('error', (err) => log.error('[updater:error]', err.message));
+
+autoUpdater.on('update-available', (info) => {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Доступно обновление',
+    message: `Вышла новая версия My Finances (${info.version}). Скачать её сейчас?`,
+    detail: 'Скачивание идёт в фоне, приложение продолжит работать. Ваши данные обновление не затрагивает.',
+    buttons: ['Скачать', 'Не сейчас'],
+  }).then(({ response }) => {
+    if (response === 0) autoUpdater.downloadUpdate().catch((e) => log.warn('[updater]', e.message));
+  });
+});
+
+autoUpdater.on('update-not-available', () => {
+  if (!manualUpdateCheck) return;
+  manualUpdateCheck = false;
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Обновлений нет',
+    message: 'У вас уже установлена последняя версия My Finances.',
+  });
+});
+
 autoUpdater.on('update-downloaded', () => {
   dialog.showMessageBox(mainWindow, {
     type: 'info',
