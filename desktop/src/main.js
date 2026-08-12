@@ -115,13 +115,14 @@ ipcMain.handle('update:check', () => triggerUpdateCheck());
 
 // ---------- Защита паролем/Touch ID ----------
 // IPC-обёртки над desktop/src/auth.js + config.js. Пароль (если введён) идёт
-// напрямую в auth.verifyMacPassword и никогда не логируется и не сохраняется —
+// напрямую в auth.verifyPassword и никогда не логируется и не сохраняется —
 // см. log.hooks выше, которое дополнительно вычищает похожие на пароль строки.
+// verifyPassword сама выбирает mac (dscl) или Windows (PowerShell) реализацию по platform.
 ipcMain.handle('app-lock:get', () => config.isAppLockEnabled());
 ipcMain.handle('app-lock:set', (event, enabled) => { config.setAppLockEnabled(enabled); return true; });
 ipcMain.handle('app-lock:can-touchid', () => auth.canUseTouchID());
 ipcMain.handle('app-lock:authenticate', (event, reason) => auth.promptTouchID(reason || 'Открыть «Мои финансы»'));
-ipcMain.handle('app-lock:password', (event, password) => auth.verifyMacPassword(password));
+ipcMain.handle('app-lock:password', (event, password) => auth.verifyPassword(password));
 
 function showLockScreen() {
   return new Promise((resolve) => {

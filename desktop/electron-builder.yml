@@ -50,6 +50,22 @@ dmg:
 
 afterSign: scripts/notarize.js
 
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # Явный icon.png (1024x1024) — electron-builder сам конвертирует его в .ico
+  # (getOrConvertIcon в app-builder-lib), отдельный build/icon.ico не нужен.
+  icon: build/icon.png
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  # Без номера версии — та же причина, что у dmg выше (стабильная ссылка
+  # /releases/latest/download/My-Finances-windows-x64.exe в README).
+  artifactName: 'My-Finances-windows-${arch}.${ext}'
+
 publish:
   provider: github
   owner: alpakafish

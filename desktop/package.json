@@ -1,7 +1,7 @@
 {
   "name": "my-finances-desktop",
   "version": "1.0.8",
-  "description": "My Finances — production macOS desktop app (embeds smeta-web backend)",
+  "description": "My Finances — production macOS/Windows desktop app (embeds smeta-web backend)",
   "private": true,
   "main": "src/main.js",
   "author": "alpakafish",
@@ -13,6 +13,8 @@
     "start": "electron .",
     "dist": "electron-builder --mac",
     "dist:dir": "electron-builder --mac --dir",
+    "dist:win": "electron-builder --win",
+    "dist:win:dir": "electron-builder --win --dir",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

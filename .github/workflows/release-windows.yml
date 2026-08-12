@@ -1,0 +1,56 @@
+name: Release Windows Desktop App
+
+# Собирает My Finances.exe (NSIS-инсталлятор, x64) и публикует на GitHub Releases,
+# в тот же релиз, что и release-macos.yml (общий тег desktop-v*, общая секция
+# publish в electron-builder.yml). Без code signing (см. CLAUDE.md) — билд
+# неподписанный, при первом запуске Windows SmartScreen покажет предупреждение,
+# см. инструкцию в README.
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch: {}
+
+# GITHUB_TOKEN по умолчанию имеет только contents:read — electron-builder
+# падает с 403 "Resource not accessible by integration" при попытке создать
+# релиз. contents:write даёт токену право создавать релизы и загружать в них
+# файлы (только в этом репозитории, только для этого workflow).
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install backend deps (shared with web version)
+        run: npm ci
+
+      - name: Backend smoke test
+        run: npm test --if-present
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm ci
+
+      - name: Desktop unit tests
+        working-directory: desktop
+        run: npm test --if-present
+
+      - name: Build + publish
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish always
+
+      - name: Upload build artifacts (debug copy, in addition to the Release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-finances-windows
+          path: desktop/dist/*.exe
+          if-no-files-found: error

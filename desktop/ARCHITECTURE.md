@@ -1,4 +1,4 @@
-# Architecture Decision Record — macOS Desktop App
+# Architecture Decision Record — Desktop App (macOS, Windows)
 
 ## Context
 
@@ -32,14 +32,20 @@ Secrets:            none exist in this app today (no API keys/OAuth/tokens).
                     electron-safeStorage/Keychain is wired as a helper module for
                     any future secret, but has nothing to store yet — documented,
                     not fabricated
-Application data:  ~/Library/Application Support/My Finances (db + logs)
+Application data:  ~/Library/Application Support/My Finances (mac) /
+                    %APPDATA%\My Finances (Windows) — db + logs
 Updates:           electron-updater, GitHub Releases provider
-Packaging:         electron-builder, mac targets dmg + zip, arch [arm64, x64]
-Signing:           Developer ID Application, via CI secrets (CSC_LINK/CSC_KEY_PASSWORD)
+Packaging:         electron-builder; mac targets dmg + zip (arch [arm64, x64]),
+                    Windows target nsis (arch [x64] only — added 2026-08-12)
+Signing:           mac — self-signed cert via CI secrets (CSC_LINK/CSC_KEY_PASSWORD,
+                    see CLAUDE.md; not a real Apple Developer ID). Windows — none
+                    (unsigned NSIS installer, SmartScreen bypass documented in README)
 Notarization:      @electron/notarize via electron-builder afterSign hook,
                     Apple ID / app-specific password / team ID from CI secrets
-CI/CD:             GitHub Actions, macos-latest runner, builds arm64 + x64,
-                    signs+notarizes only when secrets are present
+                    (mac only — not applicable to Windows)
+CI/CD:             GitHub Actions, two independent workflows publishing into the
+                    same GitHub Release: macos-latest (arm64 + x64, signs when
+                    secrets present) and windows-latest (x64, always unsigned)
 ```
 
 ## Why Electron, not Tauri or native Swift

@@ -63,6 +63,22 @@ one.
   `systemPreferences.promptTouchID()` when available, and falls back to
   verifying the macOS account password via `dscl . -authonly <user>` (password
   piped through stdin only, never argv, never logged) — see `desktop/src/auth.js`.
+  On Windows there's no Touch ID equivalent wired up (Electron's
+  `systemPreferences.canPromptTouchID` is macOS-only and just returns
+  `false`/`undefined` there, so the lock screen falls back to the password
+  field automatically, no platform branching needed in `lock.js`/`lock.html`).
+  The Windows password check (`verifyWindowsPassword` in `auth.js`) shells out
+  to `powershell.exe` and validates via
+  `System.DirectoryServices.AccountManagement.PrincipalContext('Machine').ValidateCredentials`
+  — same stdin-only-password discipline as the mac path. **Caveat**: this only
+  validates local Windows accounts; a user signed into Windows with a
+  Microsoft account may find app-lock never accepts their password (Microsoft
+  account credentials aren't checked by the local `Machine` context) — no fix
+  currently, the only way out in that case is deleting
+  `desktop-config.json` (`config.js`) to force-disable app-lock. Both mac and
+  Windows implementations are unified behind `auth.verifyPassword(password)`,
+  which branches on `process.platform` — call sites (`main.js`) never call the
+  platform-specific functions directly.
 - **Never store a "seen it once" / preference flag in `localStorage` for
   anything that needs to survive a desktop relaunch.** The desktop backend
   binds to `PORT=0` (a fresh random port every launch, on purpose, to avoid
@@ -103,7 +119,13 @@ one.
   electron-builder --mac --dir --arm64`, then verify the built `.app`'s
   `Resources/app/public/app.js` (or wherever relevant) actually contains the
   change — `files`/`extraResources` copy at build time, so editing source
-  alone doesn't update an already-built `.app`.
+  alone doesn't update an already-built `.app`. `npx electron-builder --win
+  --dir` (equivalent Windows check) also runs fine from macOS — no Windows
+  machine needed to verify the *build* succeeds and
+  `dist/win-unpacked/resources/app/` has the right files, though actually
+  *launching* `My Finances.exe` obviously still needs a real Windows machine
+  or the `windows-latest` CI runner (`npm test` in `desktop/` via the release
+  workflow).
 
 ## Building & releasing
 
@@ -124,20 +146,49 @@ cd desktop
 npm install
 npm start                       # Electron dev mode over ../server.js directly
 npm test                        # backend integration tests + real .app launch
-npm run dist:dir                # unsigned dev build → desktop/dist/mac*/My Finances.app
-npm run dist                    # full build (dmg+zip, arm64+x64); signs/notarizes if Apple env vars are set
+npm run dist:dir                # unsigned dev build (mac) → desktop/dist/mac*/My Finances.app
+npm run dist                    # full mac build (dmg+zip, arm64+x64); signs/notarizes if Apple env vars are set
+npm run dist:win:dir            # unsigned dev build (Windows) → desktop/dist/win-unpacked/My Finances.exe
+npm run dist:win                # full Windows build (nsis installer, x64), unsigned (no cert configured)
 ```
 
-**Release pipeline** (`.github/workflows/release-macos.yml`): triggers on
-push of a `desktop-v*` tag, or manual `workflow_dispatch`. Runs on
-`macos-latest`: `npm ci` + `npm test` (root, shared backend) → `npm ci` +
-`npm test` (desktop) → `electron-builder --mac --arm64 --x64 --publish
-always`. Builds both architectures as separate artifacts (no universal
-binary — smaller download per arch), publishes `.dmg`/`.zip` to GitHub
-Releases. `desktop/electron-builder.yml` sets `artifactName:
-'My-Finances-mac-${arch}.${ext}'` (no version in the filename) specifically
-so the `/releases/latest/download/My-Finances-mac-arm64.dmg` links in
-README stay valid across every future release without edits.
+`electron-builder --win` **works fine run locally on macOS** — no Windows
+machine or VM needed for a dev build. electron-builder bundles its own
+`winCodeSign`/Wine binaries (downloaded on first use, cached under
+`~/Library/Caches/electron-builder`) and ships a portable `.ico` generator
+(`getOrConvertIcon('ico')` in `app-builder-lib`), so `build/icon.ico` doesn't
+need to exist — it auto-converts `build/icon.png` (the same 1024×1024 source
+already used for the mac `.icns`) into `dist/.icon-ico/icon.ico` and embeds
+it in the `.exe` as a binary resource. Confirmed 2026-08-12: a `--win --dir`
+build from this Mac produced a working `dist/win-unpacked/` tree with
+`resources/app/node_modules` containing zero `.node` native binaries
+(express/exceljs/multer are pure JS — the same reason `node:sqlite` over
+`better-sqlite3` was chosen, see top of this file), so nothing in the shared
+backend needs a Windows-specific rebuild.
+
+**Release pipeline** — two independent workflows, both triggered by the same
+`desktop-v*` tag (or manual `workflow_dispatch`) and publishing into the
+*same* GitHub Release (electron-builder looks up the release by tag, so
+each platform's job just adds its own assets):
+
+- `.github/workflows/release-macos.yml`: `macos-latest` →
+  `electron-builder --mac --arm64 --x64 --publish always`. Builds both
+  architectures as separate artifacts (no universal binary — smaller
+  download per arch), publishes `.dmg`/`.zip`. `artifactName:
+  'My-Finances-mac-${arch}.${ext}'` (no version in the filename) keeps
+  `/releases/latest/download/My-Finances-mac-arm64.dmg` valid across every
+  future release without edits.
+- `.github/workflows/release-windows.yml`: `windows-latest` →
+  `electron-builder --win --x64 --publish always`. Single x64 target (no
+  arm64 Windows build — not worth the added CI/QA surface for how rare
+  Windows-on-ARM still is). No code-signing secrets at all (see below) —
+  unlike mac there's no self-signed-cert dance needed here since
+  electron-updater's Windows/NSIS path doesn't do Squirrel.Mac-style
+  designated-requirement signature pinning, so an unsigned build updates
+  itself over unsigned builds without issue. `artifactName:
+  'My-Finances-windows-${arch}.${ext}'` (same no-version-in-filename
+  reasoning) keeps `/releases/latest/download/My-Finances-windows-x64.exe`
+  stable.
 
 **Gotchas fixed the hard way on the actual first release run** (`v1.0.0`,
 2026-08-12 — all four bit in sequence, one per retry):
@@ -316,6 +367,25 @@ with the *same* identity. An install from before the cert existed (ad-hoc,
 e.g. `v1.0.4` and earlier) checking for `v1.0.5` will still fail the same
 way, once — those users need one manual DMG reinstall to get onto a
 cert-signed version; every update after that should work automatically.
+
+**Windows signing — deliberately not set up (2026-08-12), same call as
+Apple notarization above (real cost, declined).** No `WIN_CSC_LINK` secret,
+no `certificateFile`/`certificateSubjectName` in `electron-builder.yml`'s
+`win:` block — `electron-builder --win` builds and
+`release-windows.yml` publishes a fully unsigned NSIS installer
+(`no signing info identified, signing is skipped` in the build log, harmless).
+User-facing consequence: first run shows Windows SmartScreen's "Windows
+protected your PC" (More info → Run anyway to bypass) — documented in
+README's "Приложение для Windows" section, same shape as the mac Gatekeeper
+bypass dance. Unlike mac, this does **not** block in-app auto-update:
+electron-updater's Windows/NSIS path re-runs the downloaded installer
+directly rather than asking the OS to verify a designated-requirement
+signature match against the running binary (that's a macOS/Squirrel.Mac-only
+mechanism, see above) — so update-over-unsigned-build should work without
+the self-signed-cert workaround the mac path needed. Not yet verified
+end-to-end with a real two-version update cycle (no released Windows build
+exists yet to update *from*) — worth confirming once `v1.x` Windows releases
+exist on both sides of an update.
 
 ## README is for users, not developers
 
