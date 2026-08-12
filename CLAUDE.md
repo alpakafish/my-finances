@@ -10,6 +10,9 @@ Guidance for Claude Code (or any agent) working in this repo.
 - **Desktop** (`desktop-macos` branch, `desktop/`): Electron app that embeds the
   same backend in a `utilityProcess` and loads the same frontend in a window.
   See `desktop/ARCHITECTURE.md` for the full design rationale.
+  `desktop/DARK_THEME.md` is a not-yet-implemented plan for a desktop-only
+  dark theme (web must stay light-only) — read it before touching
+  `public/styles.css`/`app.js` colors or Chart.js chart options for that work.
 
 `server.js`, `db.js`, `routes/*.js`, and `public/*` (`index.html`, `app.js`,
 `styles.css`) are **shared** — a change there affects both web and desktop
