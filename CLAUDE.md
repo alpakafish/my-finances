@@ -89,7 +89,78 @@ one.
   change — `files`/`extraResources` copy at build time, so editing source
   alone doesn't update an already-built `.app`.
 
+## Building & releasing
+
+README.md is end-user-only now (see "README is for users, not developers"
+below) — this is where the developer-facing build/release info actually lives.
+
+**Tech stack**: Node.js, Express, `node:sqlite` (built into Node ≥22, no
+native compilation), vanilla HTML/CSS/JS, Chart.js (bundled locally), ExcelJS
+for `.xlsx` import/export. No frontend framework, no build step.
+
+**Dev commands**:
+```bash
+# web (repo root)
+npm install && npm start        # http://localhost:3000
+
+# desktop
+cd desktop
+npm install
+npm start                       # Electron dev mode over ../server.js directly
+npm test                        # backend integration tests + real .app launch
+npm run dist:dir                # unsigned dev build → desktop/dist/mac*/My Finances.app
+npm run dist                    # full build (dmg+zip, arm64+x64); signs/notarizes if Apple env vars are set
+```
+
+**Release pipeline** (`.github/workflows/release-macos.yml`): triggers on
+push of a `desktop-v*` tag, or manual `workflow_dispatch`. Runs on
+`macos-latest`: `npm ci` + `npm test` (root, shared backend) → `npm ci` +
+`npm test` (desktop) → `electron-builder --mac --arm64 --x64 --publish
+always`. Builds both architectures as separate artifacts (no universal
+binary — smaller download per arch), publishes `.dmg`/`.zip` to GitHub
+Releases. `desktop/electron-builder.yml` sets `artifactName:
+'My-Finances-mac-${arch}.${ext}'` (no version in the filename) specifically
+so the `/releases/latest/download/My-Finances-mac-arm64.dmg` links in
+README stay valid across every future release without edits.
+
+**Do NOT create a tag matching `desktop-v*`** unless you actually intend to
+trigger a real signed/published release — that pattern is the CI trigger.
+Use a different prefix (e.g. `backup-YYYY-MM-DD`) for plain safety/checkpoint
+tags.
+
+**Apple signing/notarization** — GitHub Secrets required for the release
+workflow to produce a signed build (without them it still succeeds, just
+publishes unsigned):
+
+| Secret | What |
+|---|---|
+| `MAC_CSC_LINK` | Developer ID Application cert, `.p12`, base64-encoded |
+| `MAC_CSC_KEY_PASSWORD` | password for that `.p12` |
+| `APPLE_ID` | the Apple ID enrolled in Apple Developer Program |
+| `APPLE_APP_SPECIFIC_PASSWORD` | app-specific password (appleid.apple.com) for notarytool |
+| `APPLE_TEAM_ID` | 10-char Team ID from developer.apple.com/account |
+
+Apple Developer Program is a paid ($99/yr) prerequisite for a Developer ID
+cert — there's no free way to get a notarizable cert. As of this writing, no
+certs are configured, so releases are unsigned; users need the Gatekeeper
+bypass instructions that live in README's "Приложение для Mac" section.
+
+## README is for users, not developers
+
+README.md should only ever contain what a non-technical person downloading
+or running the app needs: what it does, screenshots, how to get it running
+(web or Mac app), and the security/privacy explanation. Anything about
+building, testing, CI, signing secrets, or the tech stack belongs here in
+CLAUDE.md instead — if you add a dev-facing README section, move it here
+instead the next time you touch README.
+
 ## Git
 
-`legacy-web` branch / `legacy-web-v1` tag are the pre-desktop-migration
-snapshot — never modify them. Desktop work happens on `desktop-macos`.
+`main` is the live branch (web at repo root + `desktop/`, merged from
+`desktop-macos` on 2026-08-12). `backup-YYYY-MM-DD` tags are periodic
+safety checkpoints — never named `desktop-v*` (see release pipeline note
+above, that prefix triggers a real release). The original pre-desktop
+snapshot (`legacy-web`/`legacy-web-v1`) was deleted once desktop work was
+verified — its commit is still reachable as an ancestor of `main`
+(`6ceee2a`, "Убрать better-sqlite3 полностью..."), so nothing was lost by
+removing the named refs.
