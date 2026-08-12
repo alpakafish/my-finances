@@ -37,19 +37,29 @@ jobs:
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Секреты, которых нет в репозитории, GitHub Actions подставляет как
-          # пустую строку, а не убирает переменную — пустой CSC_LINK electron-builder
+          # Секреты кладём под другими именами (SECRET_*), а не CSC_LINK/APPLE_ID
+          # напрямую — GitHub Actions подставляет пустую строку для несуществующего
+          # secret, а не убирает переменную вовсе, а пустой CSC_LINK electron-builder
           # ошибочно принимает за путь к сертификату (резолвит в cwd, падает "not a
-          # file"). CSC_IDENTITY_AUTO_DISCOVERY=false отключает попытку авто-поиска
-          # сертификата и чинит это; на реальную подпись через непустой CSC_LINK не
-          # влияет — тот путь electron-builder всегда обрабатывает отдельно.
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder --mac --arm64 --x64 --publish always
+          # file"). Ниже эти переменные экспортируются под настоящими именами, только
+          # когда они реально не пустые — тогда electron-builder и notarize.js их
+          # вообще не видят и корректно собирают неподписанный билд.
+          SECRET_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          SECRET_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$SECRET_CSC_LINK" ]; then
+            export CSC_LINK="$SECRET_CSC_LINK"
+            export CSC_KEY_PASSWORD="$SECRET_CSC_KEY_PASSWORD"
+          fi
+          if [ -n "$SECRET_APPLE_ID" ]; then
+            export APPLE_ID="$SECRET_APPLE_ID"
+            export APPLE_APP_SPECIFIC_PASSWORD="$SECRET_APPLE_APP_SPECIFIC_PASSWORD"
+            export APPLE_TEAM_ID="$SECRET_APPLE_TEAM_ID"
+          fi
+          npx electron-builder --mac --arm64 --x64 --publish always
 
       - name: Upload build artifacts (debug copy, in addition to the Release)
         uses: actions/upload-artifact@v4
