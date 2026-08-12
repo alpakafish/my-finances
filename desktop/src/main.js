@@ -12,23 +12,17 @@ log.initialize();
 log.transports.file.level = 'info';
 log.transports.console.level = app.isPackaged ? false : 'debug';
 autoUpdater.logger = log;
-// Только проверка версии, без скачивания и установки через Squirrel.Mac:
-// macOS отдельно от Gatekeeper проверяет код-подпись скачанного обновления
-// на соответствие подписи уже установленного приложения ("designated
-// requirement"), и это требует настоящего платного Developer ID сертификата
-// с одним и тем же Team ID в каждой сборке — у нас сборки без сертификата
-// подписываются ad-hoc заново каждый раз (см. scripts/notarize.js), у ad-hoc
-// подписи нет стабильного Team ID, так что эта проверка гарантированно
-// проваливается. Проверено на 1.0.1→1.0.2 и 1.0.2→1.0.3: файл скачивался,
-// но сразу после скачивания падал с "Code signature ... did not pass
-// validation", и кнопка «Перезапустить сейчас» ничего не делала — обновление
-// было уже сломано на этом шаге, до нажатия. Вместо этого просто сообщаем
-// о новой версии со ссылкой на страницу загрузки (ручной путь уже проверен
-// и работает — см. README «Приложение для Mac»).
+// По умолчанию electron-updater скачивает найденное обновление сразу, без
+// вопроса — спрашиваем явно перед скачиванием вместо этого (см.
+// 'update-available' ниже). macOS отдельно от Gatekeeper проверяет
+// код-подпись скачанного обновления на соответствие подписи уже
+// установленного приложения ("designated requirement") через Squirrel.Mac —
+// это требует, чтобы каждая сборка подписывалась одним и тем же
+// сертификатом. См. CLAUDE.md "Apple signing/notarization" про
+// самоподписанный сертификат, который для этого используется без платного
+// Apple Developer Program.
 autoUpdater.autoDownload = false;
-autoUpdater.autoInstallOnAppQuit = false;
 let manualUpdateCheck = false;
-const RELEASES_URL = 'https://github.com/alpakafish/my-finances/releases/latest';
 
 // Financial data — keep it out of logs.
 log.hooks.push((message) => {
@@ -213,11 +207,11 @@ autoUpdater.on('update-available', (info) => {
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'Доступно обновление',
-    message: `Вышла новая версия My Finances (${info.version}).`,
-    detail: 'Автоматическая установка пока недоступна — скачайте новую версию со страницы загрузки и замените приложение в Applications, как при первой установке. Ваши данные это не затронет.',
-    buttons: ['Открыть страницу загрузки', 'Позже'],
+    message: `Вышла новая версия My Finances (${info.version}). Скачать её сейчас?`,
+    detail: 'Скачивание идёт в фоне, приложение продолжит работать. Ваши данные обновление не затрагивает.',
+    buttons: ['Скачать', 'Не сейчас'],
   }).then(({ response }) => {
-    if (response === 0) shell.openExternal(RELEASES_URL);
+    if (response === 0) autoUpdater.downloadUpdate().catch((e) => log.warn('[updater]', e.message));
   });
 });
 
@@ -228,5 +222,17 @@ autoUpdater.on('update-not-available', () => {
     type: 'info',
     title: 'Обновлений нет',
     message: 'У вас уже установлена последняя версия My Finances.',
+  });
+});
+
+autoUpdater.on('update-downloaded', () => {
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Обновление готово',
+    message: 'Новая версия My Finances загружена и будет установлена при перезапуске.',
+    detail: 'Ваши данные (база данных в Application Support) обновление не затрагивает.',
+    buttons: ['Перезапустить сейчас', 'Позже'],
+  }).then(({ response }) => {
+    if (response === 0) autoUpdater.quitAndInstall();
   });
 });

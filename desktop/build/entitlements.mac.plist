@@ -8,6 +8,16 @@
   <true/>
   <key>com.apple.security.cs.allow-dyld-environment-variables</key>
   <true/>
+  <!-- Hardened runtime's library validation requires a matching Team ID between
+       the main executable and every loaded framework/helper — a field only
+       Apple-issued Developer ID certs carry. Our self-signed code-signing
+       certificate (no paid Apple Developer Program) has none at all, so without
+       this the app crashes at launch ("different Team IDs") even though every
+       binary in the bundle is signed consistently. Standard, widely-used
+       Electron entitlement for exactly this case; harmless if a real
+       Developer ID cert is added later. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
   <key>com.apple.security.network.client</key>
   <true/>
 </dict>

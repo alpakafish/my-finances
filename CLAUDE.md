@@ -153,52 +153,84 @@ trigger a real signed/published release — that pattern is the CI trigger.
 Use a different prefix (e.g. `backup-YYYY-MM-DD`) for plain safety/checkpoint
 tags.
 
-**Apple signing/notarization** — GitHub Secrets required for the release
-workflow to produce a signed build (without them it still succeeds, just
-publishes unsigned):
+**Apple signing/notarization** — GitHub Secrets read by the release workflow:
 
 | Secret | What |
 |---|---|
-| `MAC_CSC_LINK` | Developer ID Application cert, `.p12`, base64-encoded |
+| `MAC_CSC_LINK` | code-signing cert, `.p12`, base64-encoded (see below — currently self-signed, not from Apple) |
 | `MAC_CSC_KEY_PASSWORD` | password for that `.p12` |
-| `APPLE_ID` | the Apple ID enrolled in Apple Developer Program |
-| `APPLE_APP_SPECIFIC_PASSWORD` | app-specific password (appleid.apple.com) for notarytool |
-| `APPLE_TEAM_ID` | 10-char Team ID from developer.apple.com/account |
+| `APPLE_ID` | the Apple ID enrolled in Apple Developer Program (notarization only, not currently set) |
+| `APPLE_APP_SPECIFIC_PASSWORD` | app-specific password (appleid.apple.com) for notarytool (not currently set) |
+| `APPLE_TEAM_ID` | 10-char Team ID from developer.apple.com/account (not currently set) |
 
-Apple Developer Program is a paid ($99/yr) prerequisite for a Developer ID
-cert — there's no free way to get a notarizable cert. As of this writing, no
-certs are configured, so releases are unsigned; users need the Gatekeeper
-bypass instructions that live in README's "Приложение для Mac" section.
+A real Developer ID cert (Apple Developer Program, $99/yr) is the only way
+to get the app notarized and to skip the Gatekeeper bypass dance entirely —
+that's still not set up (declined, cost), so first-run still needs the
+Gatekeeper bypass instructions in README's "Приложение для Mac" section, and
+`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` stay unset (unused
+by `notarize.js` without them, notarization silently skipped).
+
+**`MAC_CSC_LINK`/`MAC_CSC_KEY_PASSWORD` are a self-signed certificate, not
+from Apple** — set up 2026-08-12 (`v1.0.5`) specifically to fix in-app
+auto-update (see below); it does **not** help with Gatekeeper/notarization
+(self-signed certs get no more trust from Gatekeeper than no signature at
+all). The private key lives at `~/.my-finances-codesign/` on this machine
+(`cert.p12` + `p12-password.txt`) — **outside the repo, never commit it**;
+back it up somewhere durable, since losing it means every future build gets
+a new certificate and existing installs need one more manual reinstall to
+get back on the update train (same situation as right now, just once more).
+Regenerate with:
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
+  -subj "/CN=My Finances Self-Signed Code Signing/O=alpakafish (self-signed, not Apple-issued)" \
+  -addext "extendedKeyUsage=codeSigning" -addext "keyUsage=digitalSignature" \
+  -addext "basicConstraints=critical,CA:false"
+openssl pkcs12 -export -out cert.p12 -inkey key.pem -in cert.pem -legacy -password "pass:<password>"
+```
+(`-legacy` matters — macOS's `security import` expects the older RC2/3DES
+PKCS12 format; modern OpenSSL 3.x defaults to AES-256, which it can't read.)
 
 **Unsigned build must still be ad-hoc re-signed, or downloads show "damaged"
-(not bypassable)** — found and fixed 2026-08-12 (`v1.0.1`). Without a real
-cert, electron-builder just skips signing entirely ("cannot find valid
-identity"), leaving Electron's prebuilt binaries' own partial signature in
-place — which doesn't cover the resources electron-builder just assembled
-(icon, `extraResources`, edited `Info.plist`). `codesign --verify --deep
---strict` on a build like that fails ("code has no resources but signature
-indicates they must be present"). A real user's download (which sets
-`com.apple.quarantine` and triggers Gatekeeper's full assessment) then gets
-the **non-bypassable** "My Finances.app is damaged and can't be opened, move
-to Trash" dialog — not the expected/documented bypassable "unidentified
+(not bypassable)** — found and fixed 2026-08-12 (`v1.0.1`). Without any
+usable identity, electron-builder just skips signing entirely ("cannot find
+valid identity"), leaving Electron's prebuilt binaries' own partial
+signature in place — which doesn't cover the resources electron-builder just
+assembled (icon, `extraResources`, edited `Info.plist`). `codesign --verify
+--deep --strict` on a build like that fails ("code has no resources but
+signature indicates they must be present"). A real user's download (which
+sets `com.apple.quarantine` and triggers Gatekeeper's full assessment) then
+gets the **non-bypassable** "My Finances.app is damaged and can't be opened,
+move to Trash" dialog — not the expected/documented bypassable "unidentified
 developer" one. A local unquarantined `--dir` build never hits that full
 assessment, so this was invisible in dev the whole time this project
 existed. Fixed in `desktop/scripts/notarize.js`'s `afterSign` hook: when
-`CSC_LINK` isn't set, run `codesign --deep --force --sign - --entitlements
-build/entitlements.mac.plist` on the fully assembled `.app` ourselves, so the
-signature/resource seal is freshly consistent.
+`CSC_LINK` isn't set (i.e. the `MAC_CSC_LINK` secret is missing), run
+`codesign --deep --force --sign - --entitlements build/entitlements.mac.plist`
+on the fully assembled `.app` ourselves, so the signature/resource seal is
+freshly consistent. This branch is now a fallback only — with `MAC_CSC_LINK`
+set, electron-builder signs properly on its own and this hook does nothing.
 
-Second gotcha hit immediately after the first fix: do **not** pass
-`--options runtime` (hardened runtime) on that ad-hoc resign. Hardened
-runtime enforces library validation (loaded frameworks must share the main
-executable's Team ID), but a `--deep` ad-hoc sign gives every nested
-framework/helper `.app` its own independent ad-hoc identity with no team at
-all — dyld then refuses to load them at launch (`Library not loaded: ...
-different Team IDs`), so the app opens to nothing (one bare process, no
-window, no log line) even after Gatekeeper is satisfied. Hardened runtime
-only matters for notarization (which needs a real cert anyway), so it's
-skipped entirely on the unsigned/ad-hoc path — see the comment in
-`notarize.js` for the full explanation.
+**Hardened runtime + any identity with no real Team ID (ad-hoc *or*
+self-signed) breaks the app at launch** — hit twice, same root cause both
+times (2026-08-12, `v1.0.1` then again setting up the self-signed cert for
+`v1.0.5`). Hardened runtime's library validation requires every loaded
+framework/helper to share the main executable's Team ID — a field that only
+exists on Apple-issued Developer ID certs. Ad-hoc signing has no Team ID at
+all; a self-signed cert (see above) also has none (`TeamIdentifier=not set`
+either way, even though `Authority=` correctly shows our cert). Either way,
+dyld refuses to load nested binaries at launch (`Library not loaded: ...
+different Team IDs`) — the app opens to nothing (one bare process, no
+window, no log line), Gatekeeper never even gets involved. Two different
+fixes for the two paths: for the ad-hoc fallback re-sign in `notarize.js`,
+just don't pass `--options runtime`. For the self-signed-cert path (where
+electron-builder does its own signing with hardened runtime on, per
+`electron-builder.yml`'s `hardenedRuntime: true`), add
+`com.apple.security.cs.disable-library-validation` to
+`build/entitlements.mac.plist` instead — a standard, widely-used Electron
+entitlement for exactly this case, harmless if a real Apple Developer ID
+cert is ever added later (real certs usually don't need it since every
+binary shares one real Team ID, but having it present doesn't break
+anything).
 
 Verifying this class of bug requires an actual quarantined copy, not just a
 local build: `cp -R dist/mac-arm64/*.app /tmp/x/ && xattr -w
@@ -207,32 +239,44 @@ com.apple.quarantine "0081;00000000;Google Chrome;" /tmp/x/*.app`, then
 spawn the full set of Electron helper processes and a real window, not just
 one lingering main-binary process under `AppTranslocation`).
 
-**In-app auto-update (Squirrel.Mac) cannot work without a real Developer ID
-cert either — found 2026-08-12, `v1.0.2`→`v1.0.3`.** This is a separate
-mechanism from the Gatekeeper/DMG-open issues above: `electron-updater`'s
-macOS path hands the downloaded update to the OS's built-in Squirrel.Mac
-framework, which independently verifies the new bundle's code signature
-against the *running* app's signature ("designated requirement") before
-letting it install — this happens automatically right after download
-completes, not when the user clicks "restart". A real Developer ID
-signature stays consistent (same Team ID) across every build, so this
-passes; our ad-hoc signature (`codesign --sign -`, see above) is freshly
-generated per build with no stable identity, so it always fails:
-`Code signature at URL ... did not pass validation` in `main.log`, a few
-seconds after "New version X has been downloaded". The UI had already shown
-"update ready, restart now" (from `update-downloaded`) by that point, so the
-user sees a "Restart Now" button that silently does nothing when clicked —
-the update was already broken before the click, not because of it.
+**In-app auto-update (Squirrel.Mac) needs a *stable* signing identity across
+builds — found 2026-08-12, `v1.0.2`→`v1.0.3`, fixed in `v1.0.5` with the
+self-signed cert above.** This is a separate mechanism from the
+Gatekeeper/DMG-open issues above: `electron-updater`'s macOS path hands the
+downloaded update to the OS's built-in Squirrel.Mac framework, which
+independently verifies the new bundle's code signature against the
+*running* app's signature ("designated requirement") before letting it
+install — this happens automatically right after download completes, not
+when the user clicks "restart". With the old ad-hoc-only setup (freshly
+generated identity every build, no stable reference at all — `codesign -d
+-r-` showed the requirement tied to that exact build's binary hash), this
+always failed: `Code signature at URL ... did not pass validation` in
+`main.log`, a few seconds after "New version X has been downloaded" — the
+"Restart Now" button the UI had already shown (from `update-downloaded`) did
+nothing, because the update was already broken before the click.
 
-Fix: don't attempt the Squirrel.Mac download/install path at all while
-unsigned. `desktop/src/main.js` sets `autoUpdater.autoDownload = false` and
-never calls `downloadUpdate()`/`quitAndInstall()` — on `update-available` it
-just tells the user a new version exists and opens the GitHub releases page
-(`shell.openExternal`) for a manual DMG download/reinstall, which is already
-a verified-working flow (see the Gatekeeper fix above). If a real Developer
-ID cert is ever added (see "Apple signing/notarization" below), this is the
-place to switch back to the full auto-download-and-install flow — with a
-consistent real signature, Squirrel.Mac's validation would actually pass.
+The fix is **not** "get a real Apple cert" (still not done) — it's "sign
+every build with the same identity", which a self-signed certificate
+achieves too. Confirmed via `codesign -d -r-` on a cert-signed build: the
+generated designated requirement is `identifier "com.alpakafish.myfinances"
+and certificate root = H"<sha1 of our cert>"` — a hash of the *certificate*,
+not the binary, so it matches across every future build signed with the
+same `.p12`, with no dependency on Apple trusting it. Squirrel.Mac's
+validation doesn't require the certificate to be trusted by the system
+either (confirmed: `security add-trusted-cert` hangs waiting on a GUI
+prompt that never appears headlessly/in CI — never needed it; a plain
+`security import ... -T /usr/bin/codesign` plus signing by the cert's SHA-1
+hash directly was enough). `desktop/src/main.js` still asks before
+downloading (`autoUpdater.autoDownload = false`, confirm dialog on
+`update-available`), then on confirmation downloads and, once ready, offers
+to restart and install (`update-downloaded` → `quitAndInstall()`) — this now
+actually works end-to-end.
+
+One caveat worth remembering: this only works between two builds signed
+with the *same* identity. An install from before the cert existed (ad-hoc,
+e.g. `v1.0.4` and earlier) checking for `v1.0.5` will still fail the same
+way, once — those users need one manual DMG reinstall to get onto a
+cert-signed version; every update after that should work automatically.
 
 ## README is for users, not developers
 
