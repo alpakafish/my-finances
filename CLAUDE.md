@@ -190,25 +190,52 @@ openssl pkcs12 -export -out cert.p12 -inkey key.pem -in cert.pem -legacy -passwo
 (`-legacy` matters — macOS's `security import` expects the older RC2/3DES
 PKCS12 format; modern OpenSSL 3.x defaults to AES-256, which it can't read.)
 
-**Unsigned build must still be ad-hoc re-signed, or downloads show "damaged"
-(not bypassable)** — found and fixed 2026-08-12 (`v1.0.1`). Without any
-usable identity, electron-builder just skips signing entirely ("cannot find
-valid identity"), leaving Electron's prebuilt binaries' own partial
-signature in place — which doesn't cover the resources electron-builder just
-assembled (icon, `extraResources`, edited `Info.plist`). `codesign --verify
---deep --strict` on a build like that fails ("code has no resources but
-signature indicates they must be present"). A real user's download (which
-sets `com.apple.quarantine` and triggers Gatekeeper's full assessment) then
-gets the **non-bypassable** "My Finances.app is damaged and can't be opened,
-move to Trash" dialog — not the expected/documented bypassable "unidentified
-developer" one. A local unquarantined `--dir` build never hits that full
-assessment, so this was invisible in dev the whole time this project
-existed. Fixed in `desktop/scripts/notarize.js`'s `afterSign` hook: when
-`CSC_LINK` isn't set (i.e. the `MAC_CSC_LINK` secret is missing), run
-`codesign --deep --force --sign - --entitlements build/entitlements.mac.plist`
-on the fully assembled `.app` ourselves, so the signature/resource seal is
-freshly consistent. This branch is now a fallback only — with `MAC_CSC_LINK`
-set, electron-builder signs properly on its own and this hook does nothing.
+**electron-builder can't use the self-signed cert itself — it has to be
+signed manually, bypassing electron-builder's own identity lookup
+entirely.** First attempt (`v1.0.5`'s first, broken release run) exported
+the secret as `CSC_LINK`/`CSC_KEY_PASSWORD`, same as a real Apple cert
+would be — electron-builder resolves identities via `security find-identity
+-p codesigning`, which filters to identities the *system trusts*, and a
+self-signed cert never passes that (`CSSMERR_TP_NOT_TRUSTED`), so
+electron-builder silently fell back to "skipped macOS application code
+signing" and shipped a completely unsigned build — no error, no warning
+that mattered, just quietly wrong. (`codesign --sign <hash>` on the exact
+same certificate works fine *directly* — the trust check is specific to how
+electron-builder/`security find-identity` locate identities by name, not a
+real signing restriction.) Fixed by never handing the cert to
+electron-builder at all: the workflow exports it as `SELFSIGNED_CSC_LINK`/
+`SELFSIGNED_CSC_KEY_PASSWORD` instead (names electron-builder doesn't look
+at), and `desktop/scripts/notarize.js`'s `afterSign` hook does the signing
+itself — imports the `.p12` into a throwaway keychain and signs by the
+certificate's SHA-1 fingerprint (computed straight from the cert via
+`openssl x509 -noout -fingerprint -sha1`, independent of any keychain trust
+state), rather than asking `security`/electron-builder to "find" it.
+
+One more gotcha inside that fix: `codesign --keychain <path> --sign <hash>`
+does **not** reliably restrict identity lookup to that keychain — it failed
+with "no identity found" even right after importing. `codesign` actually
+resolves identities via the keychain *search list* (`security
+list-keychains`), not the `--keychain` flag. Fix: temporarily add the
+throwaway keychain to the user's search list (keeping the existing ones),
+sign, then restore the original list in a `finally` block.
+
+Ad-hoc signing (no cert configured at all — `signAdHoc()` in
+`notarize.js`) is kept as a fallback for local dev builds with no
+`SELFSIGNED_CSC_LINK` set. It solves a related but different problem, found
+and fixed earlier (2026-08-12, `v1.0.1`): without *any* signing at all,
+electron-builder skips signing entirely and leaves Electron's prebuilt
+binaries' own partial signature in place — which doesn't cover the
+resources electron-builder just assembled (icon, `extraResources`, edited
+`Info.plist`). `codesign --verify --deep --strict` on a build like that
+fails ("code has no resources but signature indicates they must be
+present"), and a real user's download (which sets `com.apple.quarantine`
+and triggers Gatekeeper's full assessment) gets the **non-bypassable** "My
+Finances.app is damaged and can't be opened, move to Trash" dialog instead
+of the expected bypassable "unidentified developer" one. A local
+unquarantined `--dir` build never hits that full assessment, so this was
+invisible in dev for a while. The ad-hoc fallback re-signs the fully
+assembled bundle fresh (`codesign --deep --force --sign -`) so the
+signature/resource seal is consistent with the final contents.
 
 **Hardened runtime + any identity with no real Team ID (ad-hoc *or*
 self-signed) breaks the app at launch** — hit twice, same root cause both
@@ -220,17 +247,13 @@ all; a self-signed cert (see above) also has none (`TeamIdentifier=not set`
 either way, even though `Authority=` correctly shows our cert). Either way,
 dyld refuses to load nested binaries at launch (`Library not loaded: ...
 different Team IDs`) — the app opens to nothing (one bare process, no
-window, no log line), Gatekeeper never even gets involved. Two different
-fixes for the two paths: for the ad-hoc fallback re-sign in `notarize.js`,
-just don't pass `--options runtime`. For the self-signed-cert path (where
-electron-builder does its own signing with hardened runtime on, per
-`electron-builder.yml`'s `hardenedRuntime: true`), add
-`com.apple.security.cs.disable-library-validation` to
-`build/entitlements.mac.plist` instead — a standard, widely-used Electron
-entitlement for exactly this case, harmless if a real Apple Developer ID
-cert is ever added later (real certs usually don't need it since every
-binary shares one real Team ID, but having it present doesn't break
-anything).
+window, no log line), Gatekeeper never even gets involved. Neither signing
+path in `notarize.js` passes `--options runtime` (hardened runtime isn't
+needed without real notarization anyway), and
+`com.apple.security.cs.disable-library-validation` is set in
+`build/entitlements.mac.plist` as a second layer of protection — a
+standard, widely-used Electron entitlement for exactly this case, harmless
+if a real Apple Developer ID cert is ever added later.
 
 Verifying this class of bug requires an actual quarantined copy, not just a
 local build: `cp -R dist/mac-arm64/*.app /tmp/x/ && xattr -w

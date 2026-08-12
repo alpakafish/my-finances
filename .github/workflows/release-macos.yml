@@ -44,13 +44,23 @@ jobs:
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Секреты кладём под другими именами (SECRET_*), а не CSC_LINK/APPLE_ID
+          # Секреты кладём под другими именами (SECRET_*), а не под настоящими
           # напрямую — GitHub Actions подставляет пустую строку для несуществующего
-          # secret, а не убирает переменную вовсе, а пустой CSC_LINK electron-builder
-          # ошибочно принимает за путь к сертификату (резолвит в cwd, падает "not a
-          # file"). Ниже эти переменные экспортируются под настоящими именами, только
-          # когда они реально не пустые — тогда electron-builder и notarize.js их
-          # вообще не видят и корректно собирают неподписанный билд.
+          # secret, а не убирает переменную вовсе, что путает и electron-builder,
+          # и наши собственные проверки ниже. Экспортируем под настоящими именами,
+          # только когда они реально не пустые.
+          #
+          # MAC_CSC_LINK/MAC_CSC_KEY_PASSWORD — самоподписанный (не от Apple)
+          # сертификат для подписи кода, см. CLAUDE.md "Apple signing/notarization".
+          # Экспортируем НЕ как CSC_LINK/CSC_KEY_PASSWORD: electron-builder ищет
+          # identity через `security find-identity -p codesigning`, который
+          # фильтрует по доверию системы и молча пропускает недоверенный
+          # самоподписанный сертификат (CSSMERR_TP_NOT_TRUSTED) — сборка тогда
+          # уходит неподписанной без единой ошибки. Вместо этого
+          # desktop/scripts/notarize.js (afterSign-хук) сам подписывает bundle
+          # по SELFSIGNED_CSC_LINK/SELFSIGNED_CSC_KEY_PASSWORD, обращаясь к
+          # сертификату напрямую по его SHA-1 хэшу — доверие системы этому не
+          # мешает.
           SECRET_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           SECRET_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -58,8 +68,8 @@ jobs:
           SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -n "$SECRET_CSC_LINK" ]; then
-            export CSC_LINK="$SECRET_CSC_LINK"
-            export CSC_KEY_PASSWORD="$SECRET_CSC_KEY_PASSWORD"
+            export SELFSIGNED_CSC_LINK="$SECRET_CSC_LINK"
+            export SELFSIGNED_CSC_KEY_PASSWORD="$SECRET_CSC_KEY_PASSWORD"
           fi
           if [ -n "$SECRET_APPLE_ID" ]; then
             export APPLE_ID="$SECRET_APPLE_ID"
