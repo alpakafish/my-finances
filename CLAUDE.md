@@ -170,6 +170,43 @@ cert — there's no free way to get a notarizable cert. As of this writing, no
 certs are configured, so releases are unsigned; users need the Gatekeeper
 bypass instructions that live in README's "Приложение для Mac" section.
 
+**Unsigned build must still be ad-hoc re-signed, or downloads show "damaged"
+(not bypassable)** — found and fixed 2026-08-12 (`v1.0.1`). Without a real
+cert, electron-builder just skips signing entirely ("cannot find valid
+identity"), leaving Electron's prebuilt binaries' own partial signature in
+place — which doesn't cover the resources electron-builder just assembled
+(icon, `extraResources`, edited `Info.plist`). `codesign --verify --deep
+--strict` on a build like that fails ("code has no resources but signature
+indicates they must be present"). A real user's download (which sets
+`com.apple.quarantine` and triggers Gatekeeper's full assessment) then gets
+the **non-bypassable** "My Finances.app is damaged and can't be opened, move
+to Trash" dialog — not the expected/documented bypassable "unidentified
+developer" one. A local unquarantined `--dir` build never hits that full
+assessment, so this was invisible in dev the whole time this project
+existed. Fixed in `desktop/scripts/notarize.js`'s `afterSign` hook: when
+`CSC_LINK` isn't set, run `codesign --deep --force --sign - --entitlements
+build/entitlements.mac.plist` on the fully assembled `.app` ourselves, so the
+signature/resource seal is freshly consistent.
+
+Second gotcha hit immediately after the first fix: do **not** pass
+`--options runtime` (hardened runtime) on that ad-hoc resign. Hardened
+runtime enforces library validation (loaded frameworks must share the main
+executable's Team ID), but a `--deep` ad-hoc sign gives every nested
+framework/helper `.app` its own independent ad-hoc identity with no team at
+all — dyld then refuses to load them at launch (`Library not loaded: ...
+different Team IDs`), so the app opens to nothing (one bare process, no
+window, no log line) even after Gatekeeper is satisfied. Hardened runtime
+only matters for notarization (which needs a real cert anyway), so it's
+skipped entirely on the unsigned/ad-hoc path — see the comment in
+`notarize.js` for the full explanation.
+
+Verifying this class of bug requires an actual quarantined copy, not just a
+local build: `cp -R dist/mac-arm64/*.app /tmp/x/ && xattr -w
+com.apple.quarantine "0081;00000000;Google Chrome;" /tmp/x/*.app`, then
+`codesign --verify --deep --strict` (must exit 0) and an actual `open` (must
+spawn the full set of Electron helper processes and a real window, not just
+one lingering main-binary process under `AppTranslocation`).
+
 ## README is for users, not developers
 
 README.md should only ever contain what a non-technical person downloading
