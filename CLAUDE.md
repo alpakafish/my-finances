@@ -424,6 +424,34 @@ e.g. `v1.0.4` and earlier) checking for `v1.0.5` will still fail the same
 way, once — those users need one manual DMG reinstall to get onto a
 cert-signed version; every update after that should work automatically.
 
+**Both release workflows racing to create the same GitHub Release can make
+one of them silently lose its uploaded assets — found on `v1.0.11`
+(2026-08-12), the first time both workflows genuinely ran concurrently
+end-to-end.** electron-builder's GitHub publisher does a check-then-create
+("release doesn't exist for this tag → create it") before uploading; when
+`release-macos.yml` and `release-windows.yml` both start from the same
+`desktop-v*` tag push, they can both pass that check before either has
+created the release, race to `POST /releases`, and the loser gets `422
+already_exists` — normally harmless (electron-builder is supposed to treat
+that as "fine, release exists, proceed"), but here it triggered an
+`⨯ Cannot cleanup:` failure that aborted the mac job **after** its log
+showed every `.dmg`/`.zip` as "uploading" — those uploads did not actually
+survive; the finished release ended up with only the Windows assets
+(`gh release view` showed just `latest.yml`/`.exe`/`.exe.blockmap`, no mac
+files at all). Whichever workflow finishes its own "create or find release"
+step first appears to win; the loser's uploads get caught up in electron-
+builder's own conflict-cleanup logic and dropped rather than retried. No fix
+shipped for the race itself (it's inside electron-builder, not our config) —
+mitigation: if either `release-*.yml` job fails after the tag push, re-run
+*that platform's* workflow alone via `gh workflow run release-<platform>.yml
+--ref main` once the tag's release already exists (confirm with `gh release
+view v<version>` first) — with the release no longer racing to be created,
+the retry just attaches that platform's assets cleanly. Always verify with
+`gh release view v<version>` that **both** platforms' assets actually landed
+after a `desktop-v*` tag push — a green workflow run is necessary but a
+failed one doesn't always mean *zero* assets uploaded, so check the asset
+list, not just job status.
+
 **Windows signing — deliberately not set up (2026-08-12), same call as
 Apple notarization above (real cost, declined).** No `WIN_CSC_LINK` secret,
 no `certificateFile`/`certificateSubjectName` in `electron-builder.yml`'s
