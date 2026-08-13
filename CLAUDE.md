@@ -517,6 +517,26 @@ after a `desktop-v*` tag push — a green workflow run is necessary but a
 failed one doesn't always mean *zero* assets uploaded, so check the asset
 list, not just job status.
 
+**Real fix, not yet done (deferred until the dark-theme work, per user,
+2026-08-13) — make the two jobs run sequentially instead of racing, not
+retry-after-the-fact.** The retry mitigation above works but requires
+noticing and manually re-running the loser every time; the actual root cause
+is that `release-macos.yml` and `release-windows.yml` both listen to the
+same `desktop-v*` tag push and start truly in parallel. Fix: merge into
+either one workflow with two jobs where the Windows job has `needs:
+[macos-job-name]` (or vice versa — whichever order), so the second job's
+electron-builder run only starts once the first has already created the
+release; no race possible since it's then a plain "release exists, attach
+more assets" case every time, matching what the manual retry already proves
+works. **Do not fix this by giving each platform a different release
+tag/name instead** (e.g. `v1.0.12-mac` / `v1.0.12-win`) — that looked like a
+tempting alternative but a `-mac`/`-win` suffix is a semver *prerelease*
+identifier, and `electron-updater` treats prerelease-tagged versions as
+lower precedence than a plain `1.0.12` release by default, which risks
+silently breaking the auto-update check confirmed working end-to-end on
+`v1.0.9`→`v1.0.10` (see above). Keep one shared release tag/version for both
+platforms — only fix the *scheduling* (sequential jobs), not the naming.
+
 **Windows signing — deliberately not set up (2026-08-12), same call as
 Apple notarization above (real cost, declined).** No `WIN_CSC_LINK` secret,
 no `certificateFile`/`certificateSubjectName` in `electron-builder.yml`'s
