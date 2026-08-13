@@ -218,6 +218,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.classList.add('active');
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'years') loadYearsTab();
+    if (btn.dataset.tab === 'limits') loadLimitsTab();
   });
 });
 
@@ -724,6 +725,130 @@ function renderInsights(container, { lines, anchorMonth }) {
 function refreshDashboard() {
   loadDashboardMonth();
   refreshOverviewCharts();
+  loadMonthlyLimitsProgress();
+  loadLimitNotifications();
+}
+
+// ---------- Category spending limits ----------
+// Переиспользует .cat-row/.cat-bar-wrap/.cat-bar — тот же визуальный язык, что
+// «Расходы по категориям» на Дашборде (см. styles.css .cat-bar.exceeded).
+function renderLimitRow(row) {
+  const color = row.category_color || CAT_COLORS_FALLBACK;
+  return `
+    <div class="cat-row">
+      <div class="cat-dot" style="background:${color}"></div>
+      <div class="cat-name">${row.category_name}</div>
+      <div class="cat-bar-wrap"><div class="cat-bar${row.exceeded ? ' exceeded' : ''}" style="width:${Math.min(100, row.pct)}%;${row.exceeded ? '' : ` background:${color}`}"></div></div>
+      <div class="cat-pct">${Math.min(999, row.pct)}%</div>
+      <div class="cat-val limit-val">${fmt(row.spent)} из ${fmt(row.limit)}</div>
+    </div>
+  `;
+}
+
+// Следует за выбранным на Дашборде месяцем (см. currentMonth) — как и остальной
+// блок «Отчёт за месяц», под которым эта карточка расположена.
+async function loadMonthlyLimitsProgress() {
+  const rows = await api(`/api/limits/progress?month=${currentMonth}`);
+  document.getElementById('monthlyLimitsCard').hidden = rows.length === 0;
+  document.getElementById('monthlyLimitsList').innerHTML = rows.map(renderLimitRow).join('');
+}
+
+// Следует за годом, выбранным в #yearSingleSelect на вкладке «По годам» — как и
+// остальной блок «Операции по месяцам за год», под которым эта карточка расположена.
+async function loadYearlyLimitsProgress() {
+  const year = document.getElementById('yearSingleSelect').value || String(CURRENT_YEAR);
+  const rows = await api(`/api/limits/progress-year?year=${year}`);
+  document.getElementById('yearlyLimitsCard').hidden = rows.length === 0;
+  document.getElementById('yearlyLimitsYearLabel').textContent = year;
+  document.getElementById('yearlyLimitsList').innerHTML = rows.map(renderLimitRow).join('');
+}
+
+// Вкладка «Лимиты» — настройка месячного/годового лимита по каждой категории
+// расходов. Перерисовывается при каждом заходе на вкладку (см. обработчик кликов
+// по .tab-btn ниже), как и «По годам» — категории могли измениться.
+async function loadLimitsTab() {
+  const cats = await api('/api/categories?type=expense');
+  const container = document.getElementById('limitsCatList');
+  container.innerHTML = cats.map((c) => `
+    <div class="limit-row" data-id="${c.id}">
+      <div class="cat-dot" style="background:${c.color}"></div>
+      <div class="limit-cat-name">${c.name}</div>
+      <div class="field">
+        <label>Лимит в месяц</label>
+        <input type="number" min="0" step="0.01" data-role="monthly" value="${c.monthly_limit ?? ''}" placeholder="не задан">
+      </div>
+      <div class="field">
+        <label>Лимит в год</label>
+        <input type="number" min="0" step="0.01" data-role="yearly" value="${c.yearly_limit ?? ''}" placeholder="не задан">
+      </div>
+      <button class="btn small secondary" data-role="save-limit">Сохранить</button>
+    </div>
+  `).join('') || '<div class="empty-hint">Нет категорий расходов</div>';
+
+  container.querySelectorAll('.limit-row').forEach((row) => {
+    const id = row.dataset.id;
+    row.querySelector('[data-role="save-limit"]').addEventListener('click', async () => {
+      const monthlyVal = row.querySelector('[data-role="monthly"]').value;
+      const yearlyVal = row.querySelector('[data-role="yearly"]').value;
+      try {
+        await api(`/api/limits/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            monthly_limit: monthlyVal === '' ? null : Number(monthlyVal),
+            yearly_limit: yearlyVal === '' ? null : Number(yearlyVal),
+          }),
+        });
+        toast('Лимиты сохранены');
+        await loadMonthlyLimitsProgress();
+        await loadYearlyLimitsProgress();
+        await loadLimitNotifications();
+      } catch (e) { toast(e.message, true); }
+    });
+  });
+}
+
+// ---------- Уведомления о лимитах (справа вверху) ----------
+// Всегда про текущий реальный месяц/год (см. routes/limits.js) — не про то, что
+// сейчас просматривается на Дашборде/«По годам». Не исчезают сами — только по
+// крестику; закрытие помнится на бэкенде до конца периода (месяца/года).
+function limitNotificationMessage(n) {
+  const periodLabel = n.limit_type === 'month' ? 'в этом месяце' : 'в этом году';
+  const limitLabel = n.limit_type === 'month' ? 'Месячный лимит' : 'Годовой лимит';
+  const verb = n.notification_type === 'exceeded' ? 'превышен' : 'почти исчерпан';
+  return `${limitLabel} категории «${n.category_name}» ${verb} (${n.pct}%) — потрачено ${fmt(n.spent)} из ${fmt(n.limit)} ${periodLabel}.`;
+}
+
+async function loadLimitNotifications() {
+  let notifications;
+  try {
+    notifications = await api('/api/limits/notifications');
+  } catch (e) { return; }
+
+  const container = document.getElementById('limitNotifications');
+  container.innerHTML = notifications.map((n) => `
+    <div class="limit-notification${n.notification_type === 'exceeded' ? ' exceeded' : ''}"
+         data-category-id="${n.category_id}" data-limit-type="${n.limit_type}"
+         data-notification-type="${n.notification_type}" data-period="${n.period}">
+      <div>${limitNotificationMessage(n)}</div>
+      <button type="button" class="limit-notification-close" aria-label="Закрыть">✕</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.limit-notification').forEach((el) => {
+    el.querySelector('.limit-notification-close').addEventListener('click', async () => {
+      el.remove();
+      try {
+        await api(`/api/limits/notifications/${el.dataset.categoryId}/dismiss`, {
+          method: 'POST',
+          body: JSON.stringify({
+            limit_type: el.dataset.limitType,
+            notification_type: el.dataset.notificationType,
+            period: el.dataset.period,
+          }),
+        });
+      } catch (e) { /* не критично — просто не запомнится, покажется снова при следующей загрузке */ }
+    });
+  });
 }
 
 // ---------- Export ----------
@@ -920,7 +1045,10 @@ document.getElementById('yearSingleTypeToggle').addEventListener('click', (e) =>
   document.querySelectorAll('#yearSingleTypeToggle button').forEach((b) => b.classList.toggle('active', b === btn));
   loadYearSingleChart();
 });
-document.getElementById('yearSingleSelect').addEventListener('change', loadYearSingleChart);
+document.getElementById('yearSingleSelect').addEventListener('change', () => {
+  loadYearSingleChart();
+  loadYearlyLimitsProgress();
+});
 
 function populateYearSingleSelect() {
   const select = document.getElementById('yearSingleSelect');
@@ -1010,7 +1138,7 @@ async function loadYearsTab() {
   allYears = await api('/api/summary/years');
   populateYearSingleSelect();
   initYearsCompareChips();
-  await Promise.all([loadYearSingleChart(), loadYearsCompareChart(), loadYearsTotals()]);
+  await Promise.all([loadYearSingleChart(), loadYearsCompareChart(), loadYearsTotals(), loadYearlyLimitsProgress()]);
 }
 
 // ---------- Settings ----------
@@ -1188,6 +1316,13 @@ const TOUR_STEPS = [
     selector: '#tab-categories',
     title: 'Категории',
     text: 'Здесь можно переименовать категорию, сменить цвет или удалить её — при удалении уже занесённые операции можно перенести на другую категорию.',
+  },
+  // ---------- Лимиты ----------
+  {
+    tab: 'limits',
+    selector: '#tab-limits',
+    title: 'Лимиты категорий',
+    text: 'Можно задать необязательный лимит трат по категории — на месяц, на год или сразу оба. Прогресс появится на Дашборде (месячный лимит) и на вкладке «По годам» (годовой), а при приближении к лимиту или его превышении — уведомление в правом верхнем углу.',
   },
   // ---------- Цели ----------
   {

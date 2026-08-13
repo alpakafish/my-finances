@@ -319,3 +319,105 @@ test('onboarding-seen flag survives a restart on a different port (the desktop s
     removeDataDir(onboardDataDir);
   }
 });
+
+test('category spending limits: progress, notifications, dismissal, rollup intentionally ignored', async () => {
+  const now = new Date();
+  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const year = String(now.getFullYear());
+  const today = now.toISOString().slice(0, 10);
+
+  const makeCat = async (name) => (await fetch(`${baseUrl}/api/categories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, type: 'expense', color: '#123456' }),
+  })).json();
+  const addTx = (categoryId, amount) => fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: today, type: 'expense', category_id: categoryId, amount, note: '' }),
+  });
+
+  // Лимиты — только для категорий расходов.
+  const categoriesNow = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const incomeCat = categoriesNow.find((c) => c.type === 'income');
+  const rejectRes = await fetch(`${baseUrl}/api/limits/${incomeCat.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_limit: 100 }),
+  });
+  assert.equal(rejectRes.status, 400);
+
+  const limited = await makeCat('Лимитная категория');
+  const setRes = await fetch(`${baseUrl}/api/limits/${limited.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_limit: 1000, yearly_limit: 5000 }),
+  });
+  assert.equal(setRes.status, 200);
+  assert.equal((await setRes.json()).monthly_limit, 1000);
+
+  // Ничего не потрачено — 0%, без уведомлений.
+  let progress = await (await fetch(`${baseUrl}/api/limits/progress?month=${month}`)).json();
+  assert.equal(progress.find((r) => r.category_id === limited.id).pct, 0);
+  let notifications = await (await fetch(`${baseUrl}/api/limits/notifications`)).json();
+  assert.ok(!notifications.some((n) => n.category_id === limited.id));
+
+  // 950 из 1000 = 95% — "приближается", не "превышен".
+  await addTx(limited.id, 950);
+  progress = await (await fetch(`${baseUrl}/api/limits/progress?month=${month}`)).json();
+  let row = progress.find((r) => r.category_id === limited.id);
+  assert.equal(row.spent, 950);
+  assert.equal(row.pct, 95);
+  assert.equal(row.exceeded, false);
+  notifications = await (await fetch(`${baseUrl}/api/limits/notifications`)).json();
+  let notif = notifications.find((n) => n.category_id === limited.id && n.limit_type === 'month');
+  assert.equal(notif?.notification_type, 'approaching');
+
+  // Закрываем — тут же пропадает из уведомлений.
+  const dismissRes = await fetch(`${baseUrl}/api/limits/notifications/${limited.id}/dismiss`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit_type: 'month', notification_type: 'approaching', period: month }),
+  });
+  assert.equal(dismissRes.status, 204);
+  notifications = await (await fetch(`${baseUrl}/api/limits/notifications`)).json();
+  assert.ok(!notifications.some((n) => n.category_id === limited.id));
+
+  // Ещё +200 — превышение (1150/1000 = 115%). Это отдельное событие ("exceeded") —
+  // закрытие "approaching" выше на него не влияет, оно показывается заново.
+  await addTx(limited.id, 200);
+  progress = await (await fetch(`${baseUrl}/api/limits/progress?month=${month}`)).json();
+  row = progress.find((r) => r.category_id === limited.id);
+  assert.equal(row.spent, 1150);
+  assert.equal(row.exceeded, true);
+  notifications = await (await fetch(`${baseUrl}/api/limits/notifications`)).json();
+  notif = notifications.find((n) => n.category_id === limited.id && n.limit_type === 'month');
+  assert.equal(notif?.notification_type, 'exceeded');
+
+  // Закрываем "exceeded" тоже, затем меняем сам лимит — закрытие должно сброситься
+  // (ситуация реально другая, при том же факте превышения).
+  await fetch(`${baseUrl}/api/limits/notifications/${limited.id}/dismiss`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limit_type: 'month', notification_type: 'exceeded', period: month }),
+  });
+  notifications = await (await fetch(`${baseUrl}/api/limits/notifications`)).json();
+  assert.ok(!notifications.some((n) => n.category_id === limited.id && n.limit_type === 'month'));
+
+  await fetch(`${baseUrl}/api/limits/${limited.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_limit: 1200, yearly_limit: 5000 }),
+  });
+  notifications = await (await fetch(`${baseUrl}/api/limits/notifications`)).json();
+  assert.ok(notifications.some((n) => n.category_id === limited.id && n.limit_type === 'month'), 'changing the limit value should un-dismiss notifications for that period');
+
+  // Годовой лимит — та же трата (1150), но по годовому лимиту (5000) это всего 23%.
+  const yearProgress = await (await fetch(`${baseUrl}/api/limits/progress-year?year=${year}`)).json();
+  const yearRow = yearProgress.find((r) => r.category_id === limited.id);
+  assert.equal(yearRow.spent, 1150);
+  assert.equal(yearRow.limit, 5000);
+
+  // Rollup намеренно НЕ учитывается в лимитах (в отличие от Дашборда/Excel) —
+  // трата в подшитой к limited категории не должна попасть в его прогресс.
+  const goalRes = await fetch(`${baseUrl}/api/goals`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Rollup test goal', target_amount: 100, new_category: { name: 'Ребёнок лимита', color: '#654321', rollup_id: limited.id } }),
+  });
+  const goal = await goalRes.json();
+  await addTx(goal.category_id, 999);
+  const progressAfterRollupTx = await (await fetch(`${baseUrl}/api/limits/progress?month=${month}`)).json();
+  assert.equal(progressAfterRollupTx.find((r) => r.category_id === limited.id).spent, 1150, 'rollup child spending must not affect the parent category limit');
+});

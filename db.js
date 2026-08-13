@@ -86,6 +86,20 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  -- Какие уведомления о лимитах категорий пользователь уже закрыл крестиком —
+  -- пока не закрыто, уведомление показывается заново при каждом открытии
+  -- приложения (см. routes/limits.js). period — "YYYY-MM" для месячных лимитов,
+  -- "YYYY" для годовых; отдельная запись на (категория, тип лимита, тип
+  -- уведомления, период) — новый период сам по себе "забывает" старое закрытие.
+  CREATE TABLE IF NOT EXISTS limit_notification_dismissals (
+    category_id INTEGER NOT NULL REFERENCES categories(id),
+    limit_type TEXT NOT NULL CHECK (limit_type IN ('month', 'year')),
+    notification_type TEXT NOT NULL CHECK (notification_type IN ('approaching', 'exceeded')),
+    period TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (category_id, limit_type, notification_type, period)
+  );
 `);
 
 // Миграция: колонка rollup_id могла отсутствовать в базе, созданной до появления целей.
@@ -94,6 +108,16 @@ db.exec(`
 const categoryColumns = db.prepare('PRAGMA table_info(categories)').all().map((c) => c.name);
 if (!categoryColumns.includes('rollup_id')) {
   db.exec('ALTER TABLE categories ADD COLUMN rollup_id INTEGER REFERENCES categories(id)');
+}
+// Необязательные лимиты трат по категории — месяц и год независимо, оба NULL,
+// пока не заданы (см. routes/limits.js). Только категории расходов ими
+// пользуются (валидируется в routes/limits.js), но колонки на categories в
+// целом — проще, чем отдельная таблица один-к-одному.
+if (!categoryColumns.includes('monthly_limit')) {
+  db.exec('ALTER TABLE categories ADD COLUMN monthly_limit REAL');
+}
+if (!categoryColumns.includes('yearly_limit')) {
+  db.exec('ALTER TABLE categories ADD COLUMN yearly_limit REAL');
 }
 
 const DEFAULT_EXPENSE_CATEGORIES = [
@@ -131,6 +155,7 @@ db.resetAllData = db.transaction(() => {
   db.exec('DELETE FROM transactions');
   db.exec('DELETE FROM goals');
   db.exec('DELETE FROM categories');
+  db.exec('DELETE FROM limit_notification_dismissals');
   insertDefaultCategories();
 });
 

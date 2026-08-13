@@ -60,6 +60,7 @@
     <button class="tab-btn active" data-tab="dashboard">Дашборд</button>
     <button class="tab-btn" data-tab="transactions">Операции</button>
     <button class="tab-btn" data-tab="categories">Категории</button>
+    <button class="tab-btn" data-tab="limits">Лимиты</button>
     <button class="tab-btn" data-tab="goals">Цели</button>
     <button class="tab-btn" data-tab="years">По годам</button>
     <button class="tab-btn" data-tab="settings">Настройки</button>
@@ -93,6 +94,11 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <div class="card" id="monthlyLimitsCard" hidden>
+      <div class="section-label">Лимиты за месяц</div>
+      <div id="monthlyLimitsList"></div>
     </div>
 
     <div class="card" id="expenseChartCard">
@@ -194,6 +200,24 @@
     </div>
   </div>
 
+  <!-- LIMITS -->
+  <div class="tab-panel" id="tab-limits">
+    <div class="card">
+      <div class="cat-group">
+        <div class="section-label" style="display:flex; align-items:center; gap:6px;">
+          <span>Лимиты категорий расходов</span>
+          <span class="tooltip-wrap info-icon-wrap">
+            <span class="info-icon">?</span>
+            <div class="tooltip-box">
+              Необязательно — можно задать лимит на месяц, на год, оба сразу или не задавать вовсе. Лимиты считаются только по собственным операциям категории — в отличие от Дашборда и сводки в Excel, сюда НЕ включаются операции из категорий, «подшитых» (rollup) к этой через настройку цели.
+            </div>
+          </span>
+        </div>
+        <div id="limitsCatList"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- GOALS -->
   <div class="tab-panel" id="tab-goals">
     <div class="card">
@@ -276,6 +300,11 @@
           <canvas id="yearSingleChart"></canvas>
         </div>
       </div></div>
+    </div>
+
+    <div class="card" id="yearlyLimitsCard" hidden>
+      <div class="section-label">Лимиты за год (<span id="yearlyLimitsYearLabel"></span>)</div>
+      <div id="yearlyLimitsList"></div>
     </div>
 
     <div class="card">
@@ -369,6 +398,8 @@
   </div>
 
 </div>
+
+<div class="limit-notifications" id="limitNotifications"></div>
 
 <div class="toast" id="toast">
   <span id="toastMsg"></span>

@@ -13,6 +13,7 @@ app.use('/api/summary', require('./routes/summary'));
 app.use('/api/export', require('./routes/export'));
 app.use('/api/import', require('./routes/import'));
 app.use('/api/goals', require('./routes/goals'));
+app.use('/api/limits', require('./routes/limits'));
 app.use('/api/settings', require('./routes/settings'));
 
 app.use((err, req, res, next) => {
