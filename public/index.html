@@ -389,6 +389,24 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="categoryDeleteModal" hidden>
+  <div class="modal">
+    <h3 id="categoryDeleteTitle">Категория используется</h3>
+    <p id="categoryDeleteText"></p>
+    <div class="field" id="categoryDeleteReassignField" style="margin-top:14px;">
+      <label>Перенести операции в категорию</label>
+      <select id="categoryDeleteReassignSelect"></select>
+    </div>
+    <div class="modal-actions" style="justify-content:space-between; flex-wrap:wrap;">
+      <button type="button" class="btn secondary" id="categoryDeleteCancel">Отмена</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn danger" id="categoryDeleteRemoveTx">Удалить операции</button>
+        <button type="button" class="btn" id="categoryDeleteReassignBtn">Перенести и удалить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="tour-overlay" id="tourOverlay" hidden>
   <div class="tour-spotlight" id="tourSpotlight"></div>
   <div class="tour-card" id="tourCard">

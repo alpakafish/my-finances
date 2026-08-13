@@ -129,9 +129,28 @@ too (mode `'confirm'` adds a Cancel button via `lock.html`/`lock.js`, mode
 `'unlock'` is the original launch-time behavior unchanged). `public/app.js`
 now just calls `window.desktopApp.confirmIdentity(reason)` and gets a plain
 boolean — no dialog logic in the renderer at all. **General lesson: never
-reach for `window.prompt()`/`window.confirm()` in this codebase's Electron
-renderer code — they don't render.** `alert()` does work but wasn't used
-here regardless, in favor of the existing `toast()` pattern.
+reach for `window.prompt()` in this codebase's Electron renderer code — it
+doesn't render.** `alert()`/`confirm()` *do* work (Electron implements those
+two via a native message box; `goalsList`'s "Удалить цель?" `confirm()` in
+`public/app.js` relies on this and is fine as-is) — it's specifically
+`prompt()` that's the trap.
+
+**A second, independent `window.prompt()` instance was found later
+(2026-08-13, user report: "deleting a category with existing transactions
+does nothing") — the category-delete flow in `renderCategoryManageLists()`
+had exactly the same bug, missed during the app-lock fix above because
+nobody grepped for other `prompt()` call sites at the time.** Replaced with
+a proper modal (`showCategoryDeleteModal`, reuses the `.modal`/`.modal-overlay`
+markup pattern already used by `showConfirmModal`) offering three real
+choices — reassign transactions to another category, delete them along with
+the category, or cancel — instead of the old ID-typed-into-a-`prompt()`
+reassign-only flow. Backend (`routes/categories.js` `DELETE /:id`) gained a
+`deleteTransactions=true` query param alongside the existing `reassignTo`
+for the second choice. **Lesson on top of the lesson: after fixing one
+`window.prompt()`/`window.confirm()` spot, grep the whole file for the same
+pattern instead of assuming it was the only one** — `grep -n
+"[^.a-zA-Z](prompt|confirm|alert)("` across `public/*.js` before considering
+this class of bug closed.
 
 **Windows icon looked noticeably smaller than other apps' icons (taskbar,
 Start menu, desktop shortcut) — user report, 2026-08-12.** `build/icon.png`

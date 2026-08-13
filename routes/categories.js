@@ -46,7 +46,7 @@ router.put('/:id', (req, res) => {
 });
 
 router.delete('/:id', (req, res) => {
-  const { reassignTo } = req.query;
+  const { reassignTo, deleteTransactions } = req.query;
   const id = Number(req.params.id);
 
   const goalUsing = db.prepare('SELECT name FROM goals WHERE category_id = ?').get(id);
@@ -57,13 +57,16 @@ router.delete('/:id', (req, res) => {
   const usageCount = db.prepare('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?').get(id).n;
 
   if (usageCount > 0) {
-    if (!reassignTo) {
+    if (reassignTo) {
+      db.prepare('UPDATE transactions SET category_id = ? WHERE category_id = ?').run(Number(reassignTo), id);
+    } else if (deleteTransactions === 'true') {
+      db.prepare('DELETE FROM transactions WHERE category_id = ?').run(id);
+    } else {
       return res.status(409).json({
-        error: 'На эту категорию есть операции. Передайте reassignTo, чтобы перенести их перед удалением.',
+        error: 'На эту категорию есть операции. Передайте reassignTo (перенести) или deleteTransactions=true (удалить их), чтобы удалить категорию.',
         usageCount,
       });
     }
-    db.prepare('UPDATE transactions SET category_id = ? WHERE category_id = ?').run(Number(reassignTo), id);
   }
 
   db.prepare('DELETE FROM categories WHERE id = ?').run(id);

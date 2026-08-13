@@ -97,6 +97,58 @@ test('transaction CRUD round-trip', async () => {
   assert.equal(delRes.status, 204);
 });
 
+test('deleting a category in use: rejects without a choice, supports reassign and delete-transactions', async () => {
+  const makeCat = async (name) => (await fetch(`${baseUrl}/api/categories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, type: 'expense', color: '#123456' }),
+  })).json();
+
+  // Плейн-удаление без операций работает сразу — не задевает сценарий с usageCount ниже.
+  const empty = await makeCat('Пустая категория для удаления');
+  const emptyDelRes = await fetch(`${baseUrl}/api/categories/${empty.id}`, { method: 'DELETE' });
+  assert.equal(emptyDelRes.status, 204);
+
+  // Без reassignTo/deleteTransactions — 409 с usageCount, категория и операция остаются на месте
+  // (см. public/app.js showCategoryDeleteModal — на это опирается UI).
+  const doomed = await makeCat('Категория с операциями');
+  const other = await makeCat('Другая категория');
+  const tx = await (await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2026-08-01', type: 'expense', category_id: doomed.id, amount: 500, note: 'in use' }),
+  })).json();
+
+  const blockedRes = await fetch(`${baseUrl}/api/categories/${doomed.id}`, { method: 'DELETE' });
+  assert.equal(blockedRes.status, 409);
+  const blockedBody = await blockedRes.json();
+  assert.equal(blockedBody.usageCount, 1);
+  const stillThere = await (await fetch(`${baseUrl}/api/categories`)).json();
+  assert.ok(stillThere.some((c) => c.id === doomed.id), 'category should survive a blocked delete attempt');
+
+  // reassignTo — операция переезжает в другую категорию, старая категория удаляется.
+  const reassignRes = await fetch(`${baseUrl}/api/categories/${doomed.id}?reassignTo=${other.id}`, { method: 'DELETE' });
+  assert.equal(reassignRes.status, 204);
+  const afterReassign = await (await fetch(`${baseUrl}/api/transactions?month=2026-08`)).json();
+  const movedTx = afterReassign.find((t) => t.id === tx.id);
+  assert.ok(movedTx, 'transaction should survive reassignment');
+  assert.equal(movedTx.category_name, 'Другая категория');
+
+  // deleteTransactions=true — категория и её операции удаляются вместе.
+  const doomed2 = await makeCat('Категория с операциями 2');
+  const tx2 = await (await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2026-08-01', type: 'expense', category_id: doomed2.id, amount: 300, note: 'to be deleted' }),
+  })).json();
+  const deleteTxRes = await fetch(`${baseUrl}/api/categories/${doomed2.id}?deleteTransactions=true`, { method: 'DELETE' });
+  assert.equal(deleteTxRes.status, 204);
+  const afterDeleteTx = await (await fetch(`${baseUrl}/api/transactions?month=2026-08`)).json();
+  assert.ok(!afterDeleteTx.some((t) => t.id === tx2.id), 'transaction should be gone along with its category');
+  const catsAfter = await (await fetch(`${baseUrl}/api/categories`)).json();
+  assert.ok(!catsAfter.some((c) => c.id === doomed2.id), 'category itself should be gone');
+});
+
 test('monthly summary reflects added transaction', async () => {
   const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
   const salary = categories.find((c) => c.name === 'Зарплата');

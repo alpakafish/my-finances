@@ -174,6 +174,42 @@ function showConfirmModal({ title, text, confirmLabel = 'Удалить', onConf
   overlay.hidden = false;
 }
 
+// ---------- Category-in-use modal (удаление категории с операциями) ----------
+// Раньше это делалось через window.prompt() — Electron не отрисовывает его в
+// BrowserWindow вообще (см. CLAUDE.md "General lesson"), поэтому в desktop-версии
+// клик по «Удалить» у категории с операциями визуально ничего не делал. Здесь тот
+// же паттерн, что для confirmIdentity/showLockScreen — обычная модалка, не
+// window.*, плюс третий вариант (удалить операции вместе с категорией), которого
+// раньше не было вовсе.
+function showCategoryDeleteModal({ categoryName, type, excludeId, usageCount, onReassign, onDeleteTransactions }) {
+  const overlay = document.getElementById('categoryDeleteModal');
+  document.getElementById('categoryDeleteText').textContent =
+    `На категорию «${categoryName}» есть операций: ${usageCount}. Что с ними сделать?`;
+
+  const reassignField = document.getElementById('categoryDeleteReassignField');
+  const reassignSelect = document.getElementById('categoryDeleteReassignSelect');
+  const reassignBtn = document.getElementById('categoryDeleteReassignBtn');
+  const removeTxBtn = document.getElementById('categoryDeleteRemoveTx');
+  const cancelBtn = document.getElementById('categoryDeleteCancel');
+
+  const others = categories.filter((c) => c.type === type && String(c.id) !== String(excludeId));
+  const canReassign = others.length > 0;
+  reassignField.style.display = canReassign ? '' : 'none';
+  reassignBtn.style.display = canReassign ? '' : 'none';
+  if (canReassign) {
+    reassignSelect.innerHTML = others.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+  }
+
+  const close = () => {
+    overlay.hidden = true;
+    reassignBtn.onclick = null; removeTxBtn.onclick = null; cancelBtn.onclick = null;
+  };
+  reassignBtn.onclick = async () => { const targetId = Number(reassignSelect.value); close(); await onReassign(targetId); };
+  removeTxBtn.onclick = async () => { close(); await onDeleteTransactions(); };
+  cancelBtn.onclick = close;
+  overlay.hidden = false;
+}
+
 // ---------- Tabs ----------
 document.querySelectorAll('.tab-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -230,6 +266,7 @@ function renderCategoryManageLists() {
         } catch (e) { toast(e.message, true); }
       });
       row.querySelector('[data-role="delete"]').addEventListener('click', async () => {
+        const categoryName = row.querySelector('[data-role="name"]').value;
         try {
           await api(`/api/categories/${id}`, { method: 'DELETE' });
           invalidateUndo();
@@ -237,23 +274,35 @@ function renderCategoryManageLists() {
           await loadCategories();
           refreshDashboard();
         } catch (e) {
-          if (e.body && e.body.usageCount) {
-            const others = categories.filter((c) => c.type === type && String(c.id) !== id);
-            const names = others.map((c) => `${c.id}: ${c.name}`).join('\n');
-            const target = prompt(
-              `На эту категорию есть ${e.body.usageCount} операций.\nВведите ID категории, куда их перенести:\n${names}`
-            );
-            const targetId = Number(target);
-            if (targetId && others.some((c) => c.id === targetId)) {
-              await api(`/api/categories/${id}?reassignTo=${targetId}`, { method: 'DELETE' });
-              invalidateUndo();
-              toast('Операции перенесены, категория удалена');
-              await loadCategories();
-              refreshDashboard();
-            }
-          } else {
+          if (!(e.body && e.body.usageCount)) {
             toast(e.message, true);
+            return;
           }
+          showCategoryDeleteModal({
+            categoryName, type, excludeId: id, usageCount: e.body.usageCount,
+            onReassign: async (targetId) => {
+              try {
+                await api(`/api/categories/${id}?reassignTo=${targetId}`, { method: 'DELETE' });
+                invalidateUndo();
+                toast('Операции перенесены, категория удалена');
+                await loadCategories();
+                await loadTransactionsTable();
+                await loadGoals();
+                refreshDashboard();
+              } catch (err) { toast(err.message, true); }
+            },
+            onDeleteTransactions: async () => {
+              try {
+                await api(`/api/categories/${id}?deleteTransactions=true`, { method: 'DELETE' });
+                invalidateUndo();
+                toast('Операции и категория удалены');
+                await loadCategories();
+                await loadTransactionsTable();
+                await loadGoals();
+                refreshDashboard();
+              } catch (err) { toast(err.message, true); }
+            },
+          });
         }
       });
     });
