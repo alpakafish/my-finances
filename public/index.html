@@ -4,6 +4,22 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Мои финансы — учёт расходов и доходов</title>
+<script>
+// Тема оформления — только для desktop-приложения (Mac/Windows), веб-версия
+// всегда светлая (window.desktopApp тут просто не существует — echo return ниже).
+// Должен идти СИНХРОННО и до <link rel="stylesheet">, иначе страница на мгновение
+// отрисуется в светлой теме и только потом перекрасится — см.
+// desktop/DARK_THEME.md "Avoid a flash of the wrong theme" и
+// desktop/src/preload.js (initialThemePreference/initialEffectiveTheme читаются
+// там синхронно через ipcRenderer.sendSync, ещё до этого скрипта).
+(function () {
+  if (typeof window.desktopApp === 'undefined' || !window.desktopApp.isDesktop) return;
+  var root = document.documentElement;
+  root.setAttribute('data-desktop', '1');
+  root.setAttribute('data-theme', window.desktopApp.initialEffectiveTheme);
+  root.style.colorScheme = window.desktopApp.initialEffectiveTheme;
+})();
+</script>
 <script src="vendor/chart.umd.js"></script>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -161,7 +177,7 @@
         <div class="section-label">Категории расходов</div>
         <div id="expenseCatList"></div>
         <div class="form-row" style="margin-top:12px;">
-          <input type="text" id="newExpenseCatName" placeholder="Новая категория расходов" style="border:1px solid #d5d5d2; border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px; min-width:200px;">
+          <input type="text" id="newExpenseCatName" class="new-cat-input" placeholder="Новая категория расходов">
           <input type="color" id="newExpenseCatColor" value="#7F77DD">
           <button class="btn small" id="addExpenseCat">Добавить</button>
         </div>
@@ -170,7 +186,7 @@
         <div class="section-label">Категории доходов</div>
         <div id="incomeCatList"></div>
         <div class="form-row" style="margin-top:12px;">
-          <input type="text" id="newIncomeCatName" placeholder="Новая категория доходов" style="border:1px solid #d5d5d2; border-radius:6px; padding:8px 10px; font-family:inherit; font-size:13px; min-width:200px;">
+          <input type="text" id="newIncomeCatName" class="new-cat-input" placeholder="Новая категория доходов">
           <input type="color" id="newIncomeCatColor" value="#1D9E75">
           <button class="btn small" id="addIncomeCat">Добавить</button>
         </div>
@@ -287,6 +303,21 @@
 
   <!-- SETTINGS -->
   <div class="tab-panel" id="tab-settings">
+    <div class="card">
+      <div class="section-label">Оформление</div>
+      <div class="settings-row">
+        <div class="settings-row-text">
+          <div class="settings-row-title">Тема</div>
+          <div class="settings-row-desc" id="themeModeDesc">Доступно только в desktop-приложении (Mac или Windows) — веб-версия всегда светлая.</div>
+        </div>
+        <div class="type-toggle" id="themeModeToggle">
+          <button type="button" data-mode="light">Светлая</button>
+          <button type="button" data-mode="dark">Тёмная</button>
+          <button type="button" data-mode="system" class="active">Системная</button>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="section-label">Безопасность</div>
       <div class="settings-row">

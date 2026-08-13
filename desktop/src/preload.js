@@ -1,5 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Синхронный IPC (sendSync, не invoke) — preload выполняется ДО любого скрипта
+// страницы, в т.ч. до inline-скрипта в <head> index.html, который ставит
+// data-theme на <html> ещё до первой отрисовки, чтобы не мигнуть не той темой
+// (см. main.js "theme:get-initial-sync" и DARK_THEME.md). invoke() тут не
+// подходит — он всегда возвращает Promise, то есть минимум на один тик позже,
+// когда страница уже могла отрисоваться со светлой темой по умолчанию.
+const initialTheme = ipcRenderer.sendSync('theme:get-initial-sync');
+
 // Общий мост для основной страницы приложения (Settings -> переключатель защиты)
 // и для отдельного lock.html (экран входа при запуске). Ни один из методов не
 // даёт доступа к Node/файловой системе из страницы — только точечные IPC-вызовы
@@ -7,6 +15,18 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('desktopApp', {
   isDesktop: true,
   platform: process.platform,
+
+  // Тема оформления (desktop-only, см. desktop/DARK_THEME.md).
+  // initialThemePreference/initialEffectiveTheme — готовые значения, прочитанные
+  // синхронно ДО того как выполнился этот скрипт (см. initialTheme выше);
+  // get/setThemePreference — обычные async IPC для переключателя в Settings;
+  // onEffectiveThemeChange — событие на случай, если пользователь выбрал
+  // "Системная" и поменял тему в самой ОС, пока приложение открыто.
+  initialThemePreference: initialTheme.preference,
+  initialEffectiveTheme: initialTheme.effective,
+  getThemePreference: () => ipcRenderer.invoke('theme:get'),
+  setThemePreference: (pref) => ipcRenderer.invoke('theme:set', pref),
+  onEffectiveThemeChange: (cb) => ipcRenderer.on('theme:effective-changed', (event, effective) => cb(effective)),
 
   // Версия приложения (Settings, футер вкладки)
   getAppVersion: () => ipcRenderer.invoke('app:get-version'),

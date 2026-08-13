@@ -27,4 +27,13 @@ function writeConfig(patch) {
 module.exports = {
   isAppLockEnabled: () => readConfig().appLockEnabled === true,
   setAppLockEnabled: (enabled) => writeConfig({ appLockEnabled: !!enabled }),
+
+  // Тема оформления — desktop-only (см. desktop/DARK_THEME.md), веб-версия
+  // этот файл вообще не читает. 'system' по умолчанию, как и в референсах
+  // (Telegram/JetBrains) — явный выбор пользователя, не только auto по ОС.
+  getThemePreference: () => {
+    const v = readConfig().themePreference;
+    return v === 'light' || v === 'dark' ? v : 'system';
+  },
+  setThemePreference: (pref) => writeConfig({ themePreference: pref === 'light' || pref === 'dark' ? pref : 'system' }),
 };

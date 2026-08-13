@@ -1,3 +1,10 @@
+// Живая смена OS-темы, пока это окно открыто (маловероятно, но дёшево
+// поддержать — тот же приём, что в public/app.js initThemeSetting).
+window.desktopApp.onEffectiveThemeChange((effective) => {
+  document.documentElement.setAttribute('data-theme', effective);
+  document.documentElement.style.colorScheme = effective;
+});
+
 (async () => {
   // Два режима, один и тот же экран: 'unlock' (запуск приложения, закрытие
   // окна = выход из приложения — см. main.js showAuthWindow/launch) и

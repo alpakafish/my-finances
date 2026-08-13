@@ -1,5 +1,84 @@
 const CAT_COLORS_FALLBACK = '#888780';
 
+// ---------- Тема оформления (desktop-only, см. desktop/DARK_THEME.md) ----------
+// html[data-theme] уже проставлен inline-скриптом в <head> index.html (до первой
+// отрисовки, чтобы не мигнуть не той темой) — здесь просто читаем то, что там есть.
+// Для веб-версии window.desktopApp не определён вовсе, data-theme никогда не
+// ставится, currentTheme() ниже всегда 'light' — тема веб-версии не трогается.
+function currentTheme() {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+
+// Chart.js рисует в <canvas> — CSS до текста осей/сетки/легенды не достаёт,
+// нужно явно передавать цвета (см. DARK_THEME.md "Chart.js — needs explicit
+// color config"). Светлые значения — это ТОЧНО дефолты самой Chart.js (сверено
+// с public/vendor/chart.umd.js: color:'#666', borderColor:rgba(0,0,0,0.1)),
+// чтобы светлая тема не изменилась ни на пиксель.
+function applyChartDefaults() {
+  const dark = currentTheme() === 'dark';
+  Chart.defaults.color = dark ? '#c8c8c4' : '#666';
+  Chart.defaults.borderColor = dark ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.1)';
+}
+
+// YEAR_PALETTE[0] (см. ниже, вкладка «По годам») — тот же почти-чёрный, что и
+// текст страницы в светлой теме; на тёмном фоне графика станет невидимым.
+// yearPalette() ниже подменяет только этот один цвет.
+function yearPalette() {
+  return currentTheme() === 'dark' ? ['#f2f2f0', ...YEAR_PALETTE.slice(1)] : YEAR_PALETTE;
+}
+
+// Пере-рендер того, что тема не может перекрасить сама через CSS: графики на
+// <canvas> (кольца целей это уже CSS-класс .ring-track, пере-рендер не нужен).
+// Вызывается и при явном выборе темы, и при живой смене OS-темы в режиме
+// "Системная" (см. initThemeSetting).
+function rerenderThemedContent() {
+  applyChartDefaults();
+  refreshDashboard();
+  loadGoals();
+  if (yearSingleChart || yearsCompareChart) {
+    loadYearSingleChart();
+    loadYearsCompareChart();
+  }
+}
+
+function applyEffectiveTheme(effective) {
+  const root = document.documentElement;
+  if (root.dataset.theme === effective) return; // не изменилось — не дёргаем графики зря
+  root.dataset.theme = effective;
+  root.style.colorScheme = effective;
+  rerenderThemedContent();
+}
+
+async function initThemeSetting() {
+  const isDesktop = typeof window.desktopApp !== 'undefined' && window.desktopApp.isDesktop;
+  const toggle = document.getElementById('themeModeToggle');
+  const row = toggle.closest('.settings-row');
+  const desc = document.getElementById('themeModeDesc');
+
+  if (!isDesktop) {
+    Array.from(toggle.querySelectorAll('button')).forEach((b) => { b.disabled = true; });
+    row.classList.add('disabled');
+    return;
+  }
+  desc.textContent = 'Применяется сразу, без перезапуска.';
+
+  const { preference } = await window.desktopApp.getThemePreference();
+  toggle.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.mode === preference));
+
+  toggle.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-mode]');
+    if (!btn) return;
+    toggle.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+    const { effective } = await window.desktopApp.setThemePreference(btn.dataset.mode);
+    applyEffectiveTheme(effective);
+  });
+
+  // Пользователь выбрал "Системная" и поменял тему в самой ОС, пока приложение
+  // открыто — main-процесс (nativeTheme.on('updated', ...) в main.js) шлёт новое
+  // эффективное значение, здесь просто применяем.
+  window.desktopApp.onEffectiveThemeChange((effective) => applyEffectiveTheme(effective));
+}
+
 let categories = [];
 let currentMonth = monthKey(new Date());
 let pieChart = null;
@@ -130,7 +209,7 @@ function renderCategoryManageLists() {
       <div class="cat-manage-row" data-id="${c.id}">
         <input type="color" value="${c.color}" data-role="color">
         <input type="text" value="${c.name}" data-role="name">
-        ${rollupName ? `<span style="font-size:11px; color:#999; white-space:nowrap;">на Дашборде → ${rollupName}</span>` : ''}
+        ${rollupName ? `<span class="rollup-label">на Дашборде → ${rollupName}</span>` : ''}
         <button class="btn small secondary" data-role="save">Сохранить</button>
         <button class="btn small danger" data-role="delete">Удалить</button>
       </div>
@@ -697,8 +776,11 @@ function ringSVG(pct, color) {
   const r = 36;
   const c = 2 * Math.PI * r;
   const offset = c * (1 - Math.max(0, Math.min(100, pct)) / 100);
+  // Трек-круг красится через CSS-класс (.ring-track { stroke: var(--color-border-subtle) }),
+  // не через фиксированный атрибут stroke — иначе не отвечает на смену темы
+  // (CSS stroke на элементе переопределяет SVG-атрибут).
   return `<svg viewBox="0 0 84 84">
-    <circle cx="42" cy="42" r="${r}" fill="none" stroke="#f0f0ee" stroke-width="8"/>
+    <circle class="ring-track" cx="42" cy="42" r="${r}" fill="none" stroke-width="8"/>
     <circle cx="42" cy="42" r="${r}" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round"
       stroke-dasharray="${c}" stroke-dashoffset="${offset}"/>
   </svg>`;
@@ -845,8 +927,9 @@ function initYearsCompareChips() {
 async function loadYearsCompareChart() {
   const data = await api(`/api/summary/yearly?type=${yearsCompareType}`);
   const filtered = data.filter((y) => selectedCompareYears.has(y.year));
+  const palette = yearPalette();
   const datasets = filtered.map((y, i) => {
-    const color = YEAR_PALETTE[i % YEAR_PALETTE.length];
+    const color = palette[i % palette.length];
     return { label: y.year, data: y.monthly, borderColor: color, backgroundColor: color, fill: false, tension: 0.25, pointRadius: 3 };
   });
 
@@ -1215,6 +1298,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- Init ----------
 (async function init() {
+  applyChartDefaults(); // до первого refreshDashboard() ниже — Chart.js читает Chart.defaults в момент создания графика
   document.getElementById('txDate').valueAsDate = new Date();
   populateMonthSelectors();
   await loadCategories();
@@ -1224,6 +1308,7 @@ document.addEventListener('keydown', (e) => {
   await initAppLockSetting();
   await initAppVersion();
   initUpdateCheckSetting();
+  await initThemeSetting();
 
   if (!(await hasSeenOnboarding())) {
     setTimeout(startTour, 400);

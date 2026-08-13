@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, Menu, shell, dialog, session, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog, session, ipcMain, nativeTheme } = require('electron');
 const log = require('electron-log/main');
 const { autoUpdater } = require('electron-updater');
 const { Backend, dataDir } = require('./backend');
@@ -59,6 +59,22 @@ const backend = new Backend();
 let mainWindow = null;
 let quitting = false;
 
+// ---------- Тема оформления (desktop-only, см. desktop/DARK_THEME.md) ----------
+// nativeTheme.themeSource — единая точка правды и для нативного chrome (меню,
+// системные диалоги, заголовок окна на Windows — на Mac titleBarStyle:'hiddenInset'
+// ниже уже кастомный, там это не задействуется), и для того, что renderer'у
+// сказать при первом старте, до применения JS/CSS темы (см. WINDOW_BG_LIGHT/DARK).
+// Ставится один раз здесь при старте (из сохранённого config.getThemePreference())
+// и заново при каждом theme:set — сам Electron дальше следит за OS-подпиской для
+// режима 'system'.
+nativeTheme.themeSource = config.getThemePreference();
+
+const WINDOW_BG_LIGHT = '#f5f5f3';
+const WINDOW_BG_DARK = '#1c1c1a';
+function currentWindowBg() {
+  return nativeTheme.shouldUseDarkColors ? WINDOW_BG_DARK : WINDOW_BG_LIGHT;
+}
+
 function createWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -66,7 +82,7 @@ function createWindow(port) {
     minWidth: 860,
     minHeight: 560,
     title: 'My Finances',
-    backgroundColor: '#f5f5f3',
+    backgroundColor: currentWindowBg(),
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -113,6 +129,35 @@ ipcMain.handle('app:get-version', () => app.getVersion());
 // предлагает установить, а не качает заново.
 ipcMain.handle('update:check', () => triggerUpdateCheck());
 
+// ---------- Тема оформления ----------
+// theme:get-initial-sync — синхронный IPC (ipcRenderer.sendSync), а не handle/invoke:
+// preload.js должен успеть отдать renderer'у готовое значение ДО первой отрисовки
+// (иначе — вспышка светлой темы перед применением тёмной, см. DARK_THEME.md
+// "Avoid a flash of the wrong theme"), а invoke всегда асинхронный, с задержкой
+// хотя бы в один тик — этого достаточно для видимой вспышки.
+ipcMain.on('theme:get-initial-sync', (event) => {
+  event.returnValue = { preference: config.getThemePreference(), effective: nativeTheme.shouldUseDarkColors ? 'dark' : 'light' };
+});
+ipcMain.handle('theme:get', () => ({ preference: config.getThemePreference(), effective: nativeTheme.shouldUseDarkColors ? 'dark' : 'light' }));
+ipcMain.handle('theme:set', (event, pref) => {
+  config.setThemePreference(pref);
+  nativeTheme.themeSource = config.getThemePreference(); // нормализует к 'light'/'dark'/'system'
+  const bg = currentWindowBg();
+  mainWindow?.setBackgroundColor(bg);
+  return { preference: config.getThemePreference(), effective: nativeTheme.shouldUseDarkColors ? 'dark' : 'light' };
+});
+// Живая смена OS-темы, пока приложение открыто и настройка — 'system': сообщаем
+// renderer'у, чтобы он перекрасил CSS-переменные и пересобрал графики без
+// перезапуска. При явном выборе 'light'/'dark' nativeTheme.shouldUseDarkColors не
+// меняется от смены OS-темы (Electron сам это гарантирует), так что здесь не
+// нужно отдельно фильтровать по текущему pref — событие и так придёт только когда
+// эффективная тема реально изменилась.
+nativeTheme.on('updated', () => {
+  const bg = currentWindowBg();
+  mainWindow?.setBackgroundColor(bg);
+  mainWindow?.webContents.send('theme:effective-changed', nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
+});
+
 // ---------- Защита паролем/Touch ID ----------
 // IPC-обёртки над desktop/src/auth.js + config.js. Пароль (если введён) идёт
 // напрямую в auth.verifyPassword и никогда не логируется и не сохраняется —
@@ -141,7 +186,7 @@ function showAuthWindow({ mode = 'unlock', reason = '' } = {}) {
       minimizable: false,
       maximizable: false,
       title: mode === 'confirm' ? 'Мои финансы — подтверждение' : 'Мои финансы — вход',
-      backgroundColor: '#f5f5f3',
+      backgroundColor: currentWindowBg(),
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
