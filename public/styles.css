@@ -305,6 +305,10 @@ td.amount-income { color: var(--color-income); }
   opacity: 0; visibility: hidden; transform: translateY(-4px);
   transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
   z-index: 50; pointer-events: none;
+  /* .info-icon-wrap рядом с тултипом иногда лежит внутри .section-label
+     (text-transform: uppercase) — без сброса здесь текст тултипа наследовал
+     капс вместе с заголовком (найдено 2026-08-14, тултип вкладки «Лимиты»). */
+  text-transform: none;
 }
 .tooltip-wrap:last-child .tooltip-box { left: auto; right: 0; }
 .tooltip-wrap.anchor-right .tooltip-box { left: auto; right: 0; }
