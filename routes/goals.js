@@ -7,10 +7,16 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Считаем по дням (округляя вверх), а не по «целым прошедшим месяцам» между датами —
+// последнее давало скачок «ежемесячно нужно» на целый месяц вперёд сразу же, как
+// только текущий день месяца становился больше дня дедлайна (даже если реально
+// прошёл всего 1 день из срока цели). Пример бага: сегодня 13-е, дедлайн 12-е число
+// через ~4 месяца — «целые месяцы» считали 3, хотя фактически прошёл только день.
+// 30.44 — среднее число дней в месяце (365.25 / 12), Math.ceil — чтобы «месяцев
+// осталось» не опускалось до 0, пока дедлайн буквально не наступил.
 function monthsBetween(fromDate, toDate) {
-  let months = (toDate.getFullYear() - fromDate.getFullYear()) * 12 + (toDate.getMonth() - fromDate.getMonth());
-  if (toDate.getDate() < fromDate.getDate()) months -= 1;
-  return months;
+  const days = (toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000);
+  return Math.ceil(days / 30.44);
 }
 
 function addMonths(dateStr, months) {

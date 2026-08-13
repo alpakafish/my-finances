@@ -173,6 +173,13 @@ test('goal creation and contribution', async () => {
   assert.equal(goalRes.status, 201);
   const goal = await goalRes.json();
   assert.equal(goal.progress, 0);
+  // На момент создания start_date === сегодня, так что monthsLeft должен ровно
+  // совпасть с duration_months (5). Не ловит саму регрессию с округлением по
+  // дню месяца, а не по дням (routes/goals.js monthsBetween, 2026-08-13) — тот
+  // баг воспроизводится только на следующий день после создания цели (start_date
+  // не задаётся через API, только date('now') на сервере), проверено вручную:
+  // сегодня=2026-08-13, дедлайн=2026-12-12 → раньше 3 мес. (66 667/мес. вместо 50 000).
+  assert.equal(goal.monthlyNeeded, 5000 / 5);
 
   const contribRes = await fetch(`${baseUrl}/api/goals/${goal.id}/contribute`, {
     method: 'POST',
