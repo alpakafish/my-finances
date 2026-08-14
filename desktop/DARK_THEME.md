@@ -1,8 +1,14 @@
-# Dark Theme — Analysis for Desktop Only (not shipped yet)
+# Dark Theme — Analysis for Desktop Only
 
-Status: **analysis only, no code changed**. Written 2026-08-13 per user request,
-to plan a dark theme for the desktop app (macOS + Windows) specifically —
-the web version (`legacy-web`) must stay light-only, unaffected.
+Status: **shipped in v1.0.13** (`a671c09`, "Add dark theme (desktop-only) per
+DARK_THEME.md plan"). Written 2026-08-13 per user request as the
+pre-implementation plan for a dark theme on the desktop app (macOS + Windows)
+specifically — the web version (`legacy-web`) stayed light-only, unaffected,
+as planned. Kept here as-is (not rewritten post-implementation) as the
+reference for the surface inventory and the *why* behind the design
+decisions below — check the actual CSS/JS for current implementation
+details rather than assuming every line here still matches the shipped code
+verbatim.
 
 This doc is the reference for the future implementation pass. It inventories
 every UI surface that needs a dark variant, flags the handful of places that

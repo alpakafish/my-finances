@@ -89,6 +89,14 @@ router.post('/', (req, res) => {
   if (!category_id && !new_category) {
     return res.status(400).json({ error: 'Выберите существующую категорию или создайте новую' });
   }
+  // Без этого 0/отрицательный/дробный duration_months тихо сохранялся и ломал
+  // addMonths()/monthsBetween() дальше по цепочке (дедлайн в прошлом или
+  // дробное число месяцев не имеет смысла) — duration_months необязателен,
+  // поэтому проверяем только когда он реально передан.
+  if (duration_months !== undefined && duration_months !== null
+    && !(Number.isInteger(duration_months) && duration_months > 0)) {
+    return res.status(400).json({ error: 'Срок цели должен быть целым числом месяцев больше нуля' });
+  }
 
   let resolvedCategoryId = category_id;
 
@@ -129,6 +137,18 @@ router.put('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM goals WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Цель не найдена' });
   const { name, target_amount, duration_months } = req.body;
+  // Та же проверка, что в POST — раньше PUT вообще не валидировал эти два поля:
+  // target_amount: 0 тихо игнорировался (0 || null → COALESCE оставлял старое
+  // значение, без сообщения об ошибке), а отрицательный проходил насквозь и
+  // сохранялся как есть. duration_months: null явно разрешён (снимает срок
+  // цели), поэтому проверяем только когда передано непустое значение.
+  if (target_amount !== undefined && target_amount !== null && !(target_amount > 0)) {
+    return res.status(400).json({ error: 'Сумма цели должна быть больше нуля' });
+  }
+  if (duration_months !== undefined && duration_months !== null
+    && !(Number.isInteger(duration_months) && duration_months > 0)) {
+    return res.status(400).json({ error: 'Срок цели должен быть целым числом месяцев больше нуля' });
+  }
   db.prepare(`
     UPDATE goals SET
       name = COALESCE(?, name),

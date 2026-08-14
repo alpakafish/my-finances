@@ -898,6 +898,11 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
   if (!file) return;
   const formData = new FormData();
   formData.append('file', file);
+  // Блокируем кнопку на время запроса — без этого быстрый повторный клик по
+  // «Импорт из Excel» (второй выбор файла, пока первый импорт ещё в процессе)
+  // мог отправить два параллельных POST /api/import.
+  const importBtn = document.getElementById('importBtn');
+  importBtn.disabled = true;
   toast(`Загружаю ${file.name}…`);
   try {
     const res = await fetch('/api/import', { method: 'POST', body: formData });
@@ -913,6 +918,8 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
     await refreshDashboard();
   } catch (err) {
     toast(err.message, true);
+  } finally {
+    importBtn.disabled = false;
   }
 });
 

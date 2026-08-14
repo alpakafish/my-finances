@@ -33,9 +33,17 @@ router.put('/:id', (req, res) => {
   const { name, color } = req.body;
   const existing = db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Категория не найдена' });
+  // typeof-проверка, а не просто truthy `name` — пустая строка проходила бы
+  // как "не менять" через COALESCE, но пробельная ("   ") раньше была truthy,
+  // .trim() превращал её в "" и COALESCE(?, name) с "" (не NULL) реально
+  // затирал название пустым. Явно отклоняем и то, и то.
+  const trimmedName = typeof name === 'string' ? name.trim() : null;
+  if (typeof name === 'string' && trimmedName === '') {
+    return res.status(400).json({ error: 'Название категории не может быть пустым' });
+  }
   try {
     db.prepare('UPDATE categories SET name = COALESCE(?, name), color = COALESCE(?, color) WHERE id = ?')
-      .run(name ? name.trim() : null, color || null, req.params.id);
+      .run(trimmedName, color || null, req.params.id);
     res.json(db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id));
   } catch (e) {
     if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -49,6 +57,9 @@ router.delete('/:id', (req, res) => {
   const { reassignTo, deleteTransactions } = req.query;
   const id = Number(req.params.id);
 
+  const existing = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: 'Категория не найдена' });
+
   const goalUsing = db.prepare('SELECT name FROM goals WHERE category_id = ?').get(id);
   if (goalUsing) {
     return res.status(409).json({ error: `Эта категория привязана к цели «${goalUsing.name}» — удалите или измените цель во вкладке «Цели», прежде чем удалять категорию.` });
@@ -58,7 +69,19 @@ router.delete('/:id', (req, res) => {
 
   if (usageCount > 0) {
     if (reassignTo) {
-      db.prepare('UPDATE transactions SET category_id = ? WHERE category_id = ?').run(Number(reassignTo), id);
+      // Без этой проверки перенос на несуществующую или на категорию другого
+      // типа (расход↔доход) раньше проходил тихо — операции физически
+      // остаются с этим category_id (FK ничего не проверяет на UPDATE
+      // здесь), но ломается смысл: расходы оказываются "привязаны" к
+      // категории дохода и наоборот.
+      const target = db.prepare('SELECT * FROM categories WHERE id = ?').get(Number(reassignTo));
+      if (!target) {
+        return res.status(400).json({ error: 'Категория для переноса операций не найдена' });
+      }
+      if (target.type !== existing.type) {
+        return res.status(400).json({ error: 'Перенести можно только на категорию того же типа (расход или доход)' });
+      }
+      db.prepare('UPDATE transactions SET category_id = ? WHERE category_id = ?').run(target.id, id);
     } else if (deleteTransactions === 'true') {
       db.prepare('DELETE FROM transactions WHERE category_id = ?').run(id);
     } else {
