@@ -341,18 +341,21 @@ document.getElementById('txTypeToggle').addEventListener('click', (e) => {
 // ---------- Add transaction ----------
 document.getElementById('txForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const excludedCheckbox = document.getElementById('txExcludedFromTotal');
   const payload = {
     type: txType,
     date: document.getElementById('txDate').value,
     category_id: Number(document.getElementById('txCategory').value),
     amount: Number(document.getElementById('txAmount').value),
     note: document.getElementById('txNote').value,
+    excluded_from_total: excludedCheckbox.checked,
   };
   try {
     await api('/api/transactions', { method: 'POST', body: JSON.stringify(payload) });
     invalidateUndo();
     document.getElementById('txAmount').value = '';
     document.getElementById('txNote').value = '';
+    excludedCheckbox.checked = false;
     toast('Операция добавлена');
     await loadTransactionsTable();
     refreshDashboard();
@@ -389,7 +392,7 @@ async function loadTransactionsTable() {
       <td>${r.date}</td>
       <td>${r.type === 'expense' ? 'Расход' : 'Доход'}</td>
       <td>${r.category_name}</td>
-      <td class="amount-${r.type}">${fmt(r.amount)}</td>
+      <td class="amount-${r.type}">${fmt(r.amount)}${r.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : ''}</td>
       <td>${r.note || ''}</td>
       <td class="row-actions">
         <button data-role="edit" title="Изменить">✎</button>
@@ -403,7 +406,7 @@ async function loadTransactionsTable() {
       const id = btn.closest('tr').dataset.id;
       const tx = currentTxRows.find((r) => String(r.id) === String(id));
       await api(`/api/transactions/${id}`, { method: 'DELETE' });
-      pendingUndo = tx ? { date: tx.date, type: tx.type, category_id: tx.category_id, amount: tx.amount, note: tx.note } : null;
+      pendingUndo = tx ? { date: tx.date, type: tx.type, category_id: tx.category_id, amount: tx.amount, note: tx.note, excluded_from_total: tx.excluded_from_total } : null;
       toast('Операция удалена', false, 2500, pendingUndo ? undoLastDelete : null);
       await loadTransactionsTable();
       refreshDashboard();
@@ -440,7 +443,12 @@ function renderTxEditRow(tx) {
     </td>
     <td><select class="edit-category">${categoryOptionsHtml(tx.type, tx.category_id)}</select></td>
     <td><input type="number" class="edit-amount" min="0" step="0.01" value="${tx.amount}"></td>
-    <td><input type="text" class="edit-note" value="${tx.note || ''}"></td>
+    <td>
+      <input type="text" class="edit-note" value="${tx.note || ''}">
+      <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;">
+        <input type="checkbox" class="edit-excluded" ${tx.excluded_from_total ? 'checked' : ''}> нал., не в общей сумме
+      </label>
+    </td>
     <td class="row-actions">
       <button data-role="save-edit" title="Сохранить">✓</button>
       <button data-role="cancel-edit" title="Отмена">✕</button>
@@ -460,6 +468,7 @@ function renderTxEditRow(tx) {
       category_id: Number(row.querySelector('.edit-category').value),
       amount: Number(row.querySelector('.edit-amount').value),
       note: row.querySelector('.edit-note').value,
+      excluded_from_total: row.querySelector('.edit-excluded').checked,
     };
     if (!payload.date || !payload.category_id || !(payload.amount > 0)) {
       toast('Заполните дату, категорию и сумму (> 0)', true);
@@ -1303,6 +1312,12 @@ const TOUR_STEPS = [
     selector: '#txForm',
     title: 'Операции — новая запись',
     text: 'Здесь можно добавить операцию: тип, дата, категория, сумма и необязательная заметка. Появится сразу в списке ниже.',
+  },
+  {
+    tab: 'transactions',
+    selector: '.checkbox-field',
+    title: 'Наличные, мимо общей суммы',
+    text: 'Отметьте «Нал., не в общей сумме» для дохода наличными (или расхода), который не должен раздувать официальные цифры — например, деньги мимо основного счёта. Такая операция получит пометку «нал.», не войдёт в общий доход/расход за месяц и год, в Баланс и в Excel-сводку — но будет учитываться в разбивке по категориям, на графиках и на вкладке «По годам», как обычная.',
   },
   {
     tab: 'transactions',

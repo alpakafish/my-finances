@@ -119,6 +119,14 @@ if (!categoryColumns.includes('monthly_limit')) {
 if (!categoryColumns.includes('yearly_limit')) {
   db.exec('ALTER TABLE categories ADD COLUMN yearly_limit REAL');
 }
+// Операция «нал.» — доход наличными, который не должен раздувать официальный
+// итог (шапка «Доход» за месяц/год, Баланс, Excel-сводка), но должен остаться
+// виден в разбивке по категориям и на графиках (см. routes/summary.js —
+// categoryBreakdown() её не фильтрует, а плоские SUM(amount) по типу — да).
+const transactionColumns = db.prepare('PRAGMA table_info(transactions)').all().map((c) => c.name);
+if (!transactionColumns.includes('excluded_from_total')) {
+  db.exec('ALTER TABLE transactions ADD COLUMN excluded_from_total INTEGER NOT NULL DEFAULT 0');
+}
 
 const DEFAULT_EXPENSE_CATEGORIES = [
   ['Еда', '#7F77DD'], ['Алкоголь', '#D85A30'], ['Счета', '#378ADD'],

@@ -9,6 +9,11 @@ router.get('/', async (req, res) => {
   workbook.creator = 'Мои финансы';
   workbook.created = new Date();
 
+  // Столбцы 1–5 (Дата/Тип/Категория/Сумма/Заметка) — фиксированный порядок,
+  // который routes/import.js читает позиционно при обратном импорте этого же
+  // формата (лист «Операции»). «Метка» — новый столбец, идёт ПОСЛЕДНИМ, а не
+  // перед «Заметкой», иначе импорт файла, экспортированного уже после этого
+  // изменения, начал бы читать «Метка» вместо реальной заметки (см. import.js).
   const txSheet = workbook.addWorksheet('Операции');
   txSheet.columns = [
     { header: 'Дата', key: 'date', width: 12 },
@@ -16,11 +21,12 @@ router.get('/', async (req, res) => {
     { header: 'Категория', key: 'category', width: 22 },
     { header: 'Сумма', key: 'amount', width: 14 },
     { header: 'Заметка', key: 'note', width: 30 },
+    { header: 'Метка', key: 'label', width: 8 },
   ];
   txSheet.getRow(1).font = { bold: true };
 
   const transactions = db.prepare(`
-    SELECT t.date, t.type, c.name AS category, t.amount, t.note
+    SELECT t.date, t.type, c.name AS category, t.amount, t.note, t.excluded_from_total
     FROM transactions t JOIN categories c ON c.id = t.category_id
     ORDER BY t.date, t.id
   `).all();
@@ -32,6 +38,7 @@ router.get('/', async (req, res) => {
       category: t.category,
       amount: t.amount,
       note: t.note,
+      label: t.excluded_from_total ? 'нал.' : '',
     });
   });
 
@@ -54,9 +61,12 @@ router.get('/', async (req, res) => {
     FROM transactions t JOIN categories c ON c.id = t.category_id
     WHERE substr(t.date, 1, 7) = ? AND (t.category_id = ? OR c.rollup_id = ?)
   `);
+  // Плоский итог по типу — как «Доход»/«Расход»/«Баланс» в приложении, «нал.»-
+  // операции сюда не входят (см. excluded_from_total в db.js); поколоночные
+  // суммы sumStmt выше по категориям их не фильтруют, как и на графиках в приложении.
   const totalStmt = db.prepare(`
     SELECT COALESCE(SUM(amount), 0) AS s FROM transactions
-    WHERE substr(date, 1, 7) = ? AND type = ?
+    WHERE substr(date, 1, 7) = ? AND type = ? AND excluded_from_total = 0
   `);
 
   months.forEach((month) => {

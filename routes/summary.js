@@ -86,14 +86,20 @@ router.get('/yearly', (req, res) => {
 
 // Годовые итоги (доход/расход/баланс) — для таблицы под графиком сравнения лет.
 router.get('/yearly-totals', (req, res) => {
+  // Список лет — по ВСЕМ операциям (включая «нал.»), иначе год, где были только
+  // операции «нал.», пропал бы из таблицы целиком вместо строки 0/0/0 — так же,
+  // как /years ниже не фильтрует их для выпадающих списков.
+  const allYears = db.prepare(`SELECT DISTINCT substr(date, 1, 4) AS year FROM transactions`).all().map((r) => r.year);
+  // Сами суммы — плоский итог по типу без разбивки на категории, как шапка
+  // месяца/года и Баланс, «нал.»-операции сюда не входят (см. excluded_from_total в db.js).
   const rows = db.prepare(`
     SELECT substr(date, 1, 4) AS year, type, SUM(amount) AS s
-    FROM transactions GROUP BY year, type
+    FROM transactions WHERE excluded_from_total = 0 GROUP BY year, type
   `).all();
 
   const byYear = {};
+  allYears.forEach((year) => { byYear[year] = { income: 0, expense: 0 }; });
   rows.forEach((r) => {
-    byYear[r.year] = byYear[r.year] || { income: 0, expense: 0 };
     byYear[r.year][r.type] = r.s;
   });
 
@@ -108,13 +114,16 @@ router.get('/yearly-totals', (req, res) => {
 
 router.get('/:month', (req, res) => {
   const { month } = req.params;
+  // «Нал.»-операции (excluded_from_total) не входят в эти плоские итоги — см.
+  // db.js. categoryBreakdown() ниже их намеренно не фильтрует, оставляя видными
+  // в разбивке по категориям и на графиках.
   const totalIncome = db.prepare(`
     SELECT COALESCE(SUM(amount), 0) AS s FROM transactions
-    WHERE substr(date, 1, 7) = ? AND type = 'income'
+    WHERE substr(date, 1, 7) = ? AND type = 'income' AND excluded_from_total = 0
   `).get(month).s;
   const totalExpense = db.prepare(`
     SELECT COALESCE(SUM(amount), 0) AS s FROM transactions
-    WHERE substr(date, 1, 7) = ? AND type = 'expense'
+    WHERE substr(date, 1, 7) = ? AND type = 'expense' AND excluded_from_total = 0
   `).get(month).s;
 
   res.json({

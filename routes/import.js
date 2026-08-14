@@ -84,10 +84,10 @@ router.post('/', upload.single('file'), async (req, res) => {
   });
 
   const existsStmt = db.prepare(
-    'SELECT id FROM transactions WHERE date = ? AND type = ? AND category_id = ? AND amount = ? AND note = ?'
+    'SELECT id FROM transactions WHERE date = ? AND type = ? AND category_id = ? AND amount = ? AND note = ? AND excluded_from_total = ?'
   );
   const insertStmt = db.prepare(
-    'INSERT INTO transactions (date, type, category_id, amount, note) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total) VALUES (?, ?, ?, ?, ?, ?)'
   );
 
   let imported = 0;
@@ -97,17 +97,18 @@ router.post('/', upload.single('file'), async (req, res) => {
   const sheetsProcessed = [];
 
   // Общая для обоих форматов часть: найти/создать категорию, пропустить дубль, вставить.
-  function importRow(date, type, amount, note, categoryName) {
+  function importRow(date, type, amount, note, categoryName, excludedFromTotal = false) {
     if (!date || !type || amount === null || amount <= 0) { skippedInvalid++; return; }
     const fallbackCategory = type === 'expense' ? FALLBACK_EXPENSE_CATEGORY : FALLBACK_INCOME_CATEGORY;
     const name = categoryName || fallbackCategory;
+    const excluded = excludedFromTotal ? 1 : 0;
 
     const { id: categoryId, created } = findOrCreateCategory(name, type);
     if (created) newCategories.add(`${name} (${type === 'expense' ? 'расход' : 'доход'})`);
 
-    if (existsStmt.get(date, type, categoryId, amount, note)) { skippedDuplicates++; return; }
+    if (existsStmt.get(date, type, categoryId, amount, note, excluded)) { skippedDuplicates++; return; }
 
-    insertStmt.run(date, type, categoryId, amount, note);
+    insertStmt.run(date, type, categoryId, amount, note, excluded);
     imported++;
   }
 
@@ -118,6 +119,10 @@ router.post('/', upload.single('file'), async (req, res) => {
       // Собственный формат экспорта этого приложения (см. routes/export.js, лист
       // «Операции») — используется для бэкапа/переноса данных между устройствами:
       // один лист на оба типа операций, тип в столбце B, 1 строка заголовка.
+      // Столбец 6 «Метка» («нал.» или пусто) появился позже столбцов 1–5 и
+      // намеренно идёт последним (см. export.js) — старые файлы, экспортированные
+      // до этого изменения, его просто не имеют, cellText на несуществующей
+      // ячейке вернёт '', что корректно читается как «не нал.».
       if (name === 'Операции') {
         sheetsProcessed.push(name);
         for (let rowNum = 2; rowNum <= ws.rowCount; rowNum++) {
@@ -128,7 +133,8 @@ router.post('/', upload.single('file'), async (req, res) => {
           const amount = cellNumber(row.getCell(4));
           const note = cellText(row.getCell(5));
           const categoryName = cellText(row.getCell(3));
-          importRow(date, type, amount, note, categoryName);
+          const excludedFromTotal = cellText(row.getCell(6)).toLowerCase() === 'нал.';
+          importRow(date, type, amount, note, categoryName, excludedFromTotal);
         }
         return;
       }

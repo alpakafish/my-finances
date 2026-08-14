@@ -208,6 +208,30 @@ td.amount-income { color: var(--color-income); }
 
 .rollup-label { font-size: 11px; color: var(--color-text-tertiary); white-space: nowrap; }
 
+.field-hint { font-size: 12px; color: var(--color-text-tertiary); line-height: 1.5; margin: -6px 0 14px; max-width: 560px; }
+.cash-badge { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--color-insight-new); border: 1px solid var(--color-insight-new); border-radius: 4px; padding: 1px 5px; margin-left: 6px; vertical-align: middle; }
+
+/* Сумма/Заметка уже в #txAmountField/#txNoteField — уже, чтобы «Добавить» помещалась
+   с ними в одну строку; чекбокс «нал.» — второй строкой под полем суммы, см. index.html.
+   #txAmountField не растёт по высоте из-за чекбокса (иначе .form-row с align-items:
+   flex-end по нижнему краю сдвигает более короткие соседние поля вниз, и подпись
+   «Сумма» визуально отрывается от «Тип»/«Дата»/«Категория» — проверено вживую) —
+   чекбокс вынесен из потока абсолютным позиционированием, а form-row получает
+   запас снизу под него. Пояснение — не текст под формой, а тултип по ⓘ (см.
+   .tooltip-wrap/.info-icon ниже, тот же паттерн, что в «Лимитах»/«Целях»),
+   поэтому подпись короткая («Нал.») и в одну строку, без переносов.
+*/
+#txForm .form-row { margin-bottom: 26px; }
+#txAmountField { width: 100px; position: relative; }
+#txAmountField > input { width: 100%; min-width: 0; }
+#txNoteField { width: 160px; }
+#txNoteField input { width: 100%; min-width: 0; }
+
+.checkbox-field { display: flex; position: absolute; top: 100%; left: 0; flex-direction: row !important; align-items: center; gap: 4px; cursor: pointer; margin-top: 6px; width: max-content; }
+.checkbox-field input[type="checkbox"] { width: 13px; min-width: 0; height: 13px; margin: 0; flex-shrink: 0; }
+.checkbox-field span { font-size: 12px; color: var(--color-text-secondary); line-height: 1; white-space: nowrap; }
+.checkbox-field .info-icon { margin-left: 0; }
+
 .insight-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .insight { padding: 10px 14px; background: var(--color-surface-alt); border-left: 3px solid var(--color-border-input); border-radius: 0 8px 8px 0; font-size: 12.5px; color: var(--color-text-secondary); line-height: 1.6; }
 .insight b { color: var(--color-text); font-weight: 600; }
@@ -315,6 +339,12 @@ td.amount-income { color: var(--color-income); }
   text-transform: none;
   font-weight: normal;
   letter-spacing: normal;
+  /* Тот же наследуемый-от-соседа случай, что выше, но с white-space: в форме
+     операции .tooltip-wrap лежит внутри .checkbox-field, а там span'ам задан
+     white-space: nowrap (чтобы метка «Нал.» не переносилась) — без сброса
+     здесь текст тултипа наследует nowrap и не переносится, а обрезается по
+     ширине box'а вместо переноса на новую строку. */
+  white-space: normal;
 }
 .tooltip-wrap:last-child .tooltip-box { left: auto; right: 0; }
 .tooltip-wrap.anchor-right .tooltip-box { left: auto; right: 0; }

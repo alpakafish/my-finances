@@ -20,29 +20,30 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { date, type, category_id, amount, note } = req.body;
+  const { date, type, category_id, amount, note, excluded_from_total } = req.body;
   if (!date || !['expense', 'income'].includes(type) || !category_id || !(amount > 0)) {
     return res.status(400).json({ error: 'Заполните дату, тип, категорию и сумму (> 0)' });
   }
   const info = db.prepare(
-    'INSERT INTO transactions (date, type, category_id, amount, note) VALUES (?, ?, ?, ?, ?)'
-  ).run(date, type, category_id, amount, note || '');
+    'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(date, type, category_id, amount, note || '', excluded_from_total ? 1 : 0);
   res.status(201).json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(info.lastInsertRowid));
 });
 
 router.put('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Операция не найдена' });
-  const { date, type, category_id, amount, note } = req.body;
+  const { date, type, category_id, amount, note, excluded_from_total } = req.body;
   db.prepare(`
     UPDATE transactions SET
       date = COALESCE(?, date),
       type = COALESCE(?, type),
       category_id = COALESCE(?, category_id),
       amount = COALESCE(?, amount),
-      note = COALESCE(?, note)
+      note = COALESCE(?, note),
+      excluded_from_total = COALESCE(?, excluded_from_total)
     WHERE id = ?
-  `).run(date || null, type || null, category_id || null, amount || null, note ?? null, req.params.id);
+  `).run(date || null, type || null, category_id || null, amount || null, note ?? null, excluded_from_total === undefined ? null : (excluded_from_total ? 1 : 0), req.params.id);
   res.json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id));
 });
 
