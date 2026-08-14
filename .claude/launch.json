@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "smeta-web-preview",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["DATA_DIR=/tmp/smeta-preview-data", "PORT=3000", "node", "server.js"],
+      "port": 3000
+    }
+  ]
+}

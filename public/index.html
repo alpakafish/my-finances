@@ -102,6 +102,16 @@
       <div id="monthlyLimitsList"></div>
     </div>
 
+    <div class="card" id="reconciliationCard" hidden>
+      <div class="section-label">Сверка с картой</div>
+      <div class="recon-rows" id="reconciliationRows"></div>
+      <div class="recon-actual">
+        <label for="reconciliationActualInput">Фактически на карте</label>
+        <input type="number" step="0.01" id="reconciliationActualInput" placeholder="Сумма с карты">
+      </div>
+      <div id="reconciliationMatchPill"></div>
+    </div>
+
     <div class="card" id="expenseChartCard">
       <div class="section-label">Расходы по месяцам, <span data-role="currentYearLabel"></span></div>
       <div class="chart-scroll"><div class="chart-scroll-inner">
@@ -434,6 +444,28 @@
           <option value="AED">Дирхам ОАЭ (د.إ)</option>
           <option value="JPY">Иена (¥)</option>
         </select>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-label">Сверка с картой</div>
+      <div class="settings-row">
+        <div class="settings-row-text">
+          <div class="settings-row-title">Точка отсчёта</div>
+          <div class="settings-row-desc">Необязательно. Дата и сумма, от которой считается накопительный остаток для сравнения с картой — обычно последний раз, когда вы сверялись вручную. Пока не заполнено, карточка «Сверка с картой» на Дашборде не показывается.</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+          <div class="field">
+            <label for="reconciliationDateInput">Дата</label>
+            <input type="date" id="reconciliationDateInput">
+          </div>
+          <div class="field">
+            <label for="reconciliationAmountInput">Сумма</label>
+            <input type="number" step="0.01" id="reconciliationAmountInput" placeholder="0" style="width:110px;">
+          </div>
+          <button class="btn secondary" id="reconciliationClearBtn">Сбросить</button>
+          <button class="btn" id="reconciliationSaveBtn">Сохранить</button>
+        </div>
       </div>
     </div>
 

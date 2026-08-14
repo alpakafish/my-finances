@@ -990,6 +990,7 @@ function refreshDashboard() {
   loadDashboardMonth();
   refreshOverviewCharts();
   loadMonthlyLimitsProgress();
+  loadReconciliationCard();
   loadLimitNotifications();
   loadBackupNotification();
 }
@@ -1039,6 +1040,64 @@ async function loadMonthlyLimitsProgress() {
   overallSection.hidden = !hasOverall;
   overallSection.innerHTML = hasOverall ? renderOverallBudgetRow(overall) : '';
   document.getElementById('monthlyLimitsList').innerHTML = rows.map(renderLimitRow).join('');
+}
+
+function formatDateRu(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function renderReconciliationRows(data) {
+  const netColor = data.since_net >= 0 ? 'var(--color-income)' : 'var(--color-expense)';
+  const netSign = data.since_net >= 0 ? '+' : '';
+  return `
+    <div class="recon-row">
+      <div class="rl">Остаток на ${formatDateRu(data.anchor_date)}<small>точка отсчёта, задана в Настройках</small></div>
+      <div class="rv">${fmt(data.anchor_amount)}</div>
+    </div>
+    <div class="recon-row">
+      <div class="rl">Операции с ${formatDateRu(data.anchor_date)}</div>
+      <div class="rv" style="color:${netColor}">${netSign}${fmt(data.since_net)}</div>
+    </div>
+    <div class="recon-row total">
+      <div class="rl">Ожидаемый остаток</div>
+      <div class="rv">${fmt(data.expected)}</div>
+    </div>
+  `;
+}
+
+// Сравнение «Фактически на карте» ничего не сохраняет на бэкенде — это разовая
+// сверка в моменте, введённое число нужно только чтобы посчитать и показать
+// расхождение прямо сейчас (см. концепт, обсуждённый перед реализацией).
+function updateReconciliationMatch(expected) {
+  const input = document.getElementById('reconciliationActualInput');
+  const pill = document.getElementById('reconciliationMatchPill');
+  const raw = input.value;
+  if (raw === '') { pill.innerHTML = ''; return; }
+  const actual = Number(raw);
+  if (Number.isNaN(actual)) { pill.innerHTML = ''; return; }
+  const diff = actual - expected;
+  if (Math.round(Math.abs(diff)) === 0) {
+    pill.innerHTML = '<div class="match-pill ok">✓ Сходится</div>';
+  } else {
+    const sign = diff > 0 ? '+' : '';
+    pill.innerHTML = `<div class="match-pill mismatch">Расхождение: ${sign}${fmt(diff)}</div>`;
+  }
+}
+
+// Следует за выбранным на Дашборде месяцем (currentMonth), как и «Лимиты за
+// месяц» выше — карточка вообще не рендерится, пока в Настройках не задана
+// точка отсчёта (см. routes/reconciliation.js GET /:month → { set: false }).
+async function loadReconciliationCard() {
+  const data = await api(`/api/reconciliation/${currentMonth}`);
+  const card = document.getElementById('reconciliationCard');
+  card.hidden = !data.set;
+  if (!data.set) return;
+
+  document.getElementById('reconciliationRows').innerHTML = renderReconciliationRows(data);
+  const actualInput = document.getElementById('reconciliationActualInput');
+  actualInput.oninput = () => updateReconciliationMatch(data.expected);
+  updateReconciliationMatch(data.expected);
 }
 
 // Следует за годом, выбранным в #yearSingleSelect на вкладке «По годам» — как и
@@ -1609,6 +1668,42 @@ async function initCurrencySetting() {
   });
 }
 
+// Настройки → «Сверка с картой» — точка отсчёта для карточки на Дашборде
+// (public/index.html #reconciliationCard). Оба поля читаются/пишутся вместе:
+// раздел на Дашборде показывается только когда задано и то, и другое (см.
+// routes/reconciliation.js).
+async function initReconciliationSetting() {
+  const dateInput = document.getElementById('reconciliationDateInput');
+  const amountInput = document.getElementById('reconciliationAmountInput');
+
+  const anchor = await api('/api/reconciliation');
+  dateInput.value = anchor.anchor_date || '';
+  amountInput.value = anchor.anchor_amount ?? '';
+
+  document.getElementById('reconciliationSaveBtn').addEventListener('click', async () => {
+    if (!dateInput.value || amountInput.value === '') {
+      toast('Укажите и дату, и сумму', true);
+      return;
+    }
+    try {
+      await api('/api/reconciliation', {
+        method: 'PUT',
+        body: JSON.stringify({ anchor_date: dateInput.value, anchor_amount: Number(amountInput.value) }),
+      });
+      toast('Точка отсчёта сохранена');
+      await refreshDashboard();
+    } catch (e) { toast(e.message, true); }
+  });
+
+  document.getElementById('reconciliationClearBtn').addEventListener('click', async () => {
+    await api('/api/reconciliation', { method: 'DELETE' });
+    dateInput.value = '';
+    amountInput.value = '';
+    toast('Точка отсчёта сброшена');
+    await refreshDashboard();
+  });
+}
+
 // Версия приложения — в desktop-версии через Electron (app.getVersion(), точная версия
 // собранного бандла), в веб-версии — с бэкенда (version из корневого package.json).
 async function initAppVersion() {
@@ -1924,6 +2019,7 @@ document.addEventListener('keydown', (e) => {
   initUpdateCheckSetting();
   await initThemeSetting();
   await initBackupsSetting();
+  await initReconciliationSetting();
 
   if (!(await hasSeenOnboarding())) {
     setTimeout(startTour, 400);

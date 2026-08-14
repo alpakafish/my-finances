@@ -19,6 +19,7 @@ app.use('/api/goals', require('./routes/goals'));
 app.use('/api/limits', require('./routes/limits'));
 app.use('/api/recurring', require('./routes/recurring'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/reconciliation', require('./routes/reconciliation'));
 
 app.use((err, req, res, next) => {
   console.error(err);
