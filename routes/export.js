@@ -11,9 +11,10 @@ router.get('/', async (req, res) => {
 
   // Столбцы 1–5 (Дата/Тип/Категория/Сумма/Заметка) — фиксированный порядок,
   // который routes/import.js читает позиционно при обратном импорте этого же
-  // формата (лист «Операции»). «Метка» — новый столбец, идёт ПОСЛЕДНИМ, а не
-  // перед «Заметкой», иначе импорт файла, экспортированного уже после этого
-  // изменения, начал бы читать «Метка» вместо реальной заметки (см. import.js).
+  // формата (лист «Операции»). «Метка» и «Повтор.» — новые столбцы, каждый раз
+  // добавлялись ПОСЛЕДНИМИ, а не перед «Заметкой» — иначе импорт файла,
+  // экспортированного уже после этого изменения, начал бы читать не тот
+  // столбец как реальную заметку (см. import.js).
   const txSheet = workbook.addWorksheet('Операции');
   txSheet.columns = [
     { header: 'Дата', key: 'date', width: 12 },
@@ -22,11 +23,12 @@ router.get('/', async (req, res) => {
     { header: 'Сумма', key: 'amount', width: 14 },
     { header: 'Заметка', key: 'note', width: 30 },
     { header: 'Метка', key: 'label', width: 8 },
+    { header: 'Повтор.', key: 'recurring', width: 8 },
   ];
   txSheet.getRow(1).font = { bold: true };
 
   const transactions = db.prepare(`
-    SELECT t.date, t.type, c.name AS category, t.amount, t.note, t.excluded_from_total
+    SELECT t.date, t.type, c.name AS category, t.amount, t.note, t.excluded_from_total, t.is_recurring
     FROM transactions t JOIN categories c ON c.id = t.category_id
     ORDER BY t.date, t.id
   `).all();
@@ -39,6 +41,7 @@ router.get('/', async (req, res) => {
       amount: t.amount,
       note: t.note,
       label: t.excluded_from_total ? 'нал.' : '',
+      recurring: t.is_recurring ? 'да' : '',
     });
   });
 

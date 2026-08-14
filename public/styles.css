@@ -210,24 +210,40 @@ td.amount-income { color: var(--color-income); }
 
 .field-hint { font-size: 12px; color: var(--color-text-tertiary); line-height: 1.5; margin: -6px 0 14px; max-width: 560px; }
 .cash-badge { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--color-insight-new); border: 1px solid var(--color-insight-new); border-radius: 4px; padding: 1px 5px; margin-left: 6px; vertical-align: middle; }
+.recurring-badge-wrap { margin-left: 6px; vertical-align: middle; }
+.recurring-badge { display: inline-flex; align-items: center; font-size: 12px; color: var(--color-insight-up); cursor: help; }
+
+/* ---------- Повторяющиеся операции (карточки-подсказки, вкладка «Операции») ---------- */
+.recurring-suggestions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.recurring-suggestion { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--color-surface-alt); border-left: 3px solid var(--color-insight-up); border-radius: 0 8px 8px 0; flex-wrap: wrap; }
+.recurring-suggestion .recurring-icon { font-size: 16px; color: var(--color-insight-up); flex-shrink: 0; }
+.recurring-suggestion-text { flex: 1; min-width: 160px; }
+.recurring-suggestion-title { font-size: 13px; color: var(--color-text); }
+.recurring-suggestion-meta { font-size: 11.5px; color: var(--color-text-tertiary); }
+.recurring-suggestion input { width: 100px; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 13px; background: var(--color-surface); color: var(--color-text); }
+.recurring-suggestion-skip { background: none; border: none; color: var(--color-text-tertiary); font-size: 12px; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.recurring-suggestion-skip:hover { color: var(--color-text); }
 
 /* Сумма/Заметка уже в #txAmountField/#txNoteField — уже, чтобы «Добавить» помещалась
-   с ними в одну строку; чекбокс «нал.» — второй строкой под полем суммы, см. index.html.
-   #txAmountField не растёт по высоте из-за чекбокса (иначе .form-row с align-items:
-   flex-end по нижнему краю сдвигает более короткие соседние поля вниз, и подпись
-   «Сумма» визуально отрывается от «Тип»/«Дата»/«Категория» — проверено вживую) —
-   чекбокс вынесен из потока абсолютным позиционированием, а form-row получает
-   запас снизу под него. Пояснение — не текст под формой, а тултип по ⓘ (см.
-   .tooltip-wrap/.info-icon ниже, тот же паттерн, что в «Лимитах»/«Целях»),
-   поэтому подпись короткая («Нал.») и в одну строку, без переносов.
+   с ними в одну строку; чекбоксы «нал.»/«повтор.» — второй строкой под полем суммы,
+   см. index.html. #txAmountField не растёт по высоте из-за них (иначе .form-row с
+   align-items: flex-end по нижнему краю сдвигает более короткие соседние поля вниз,
+   и подпись «Сумма» визуально отрывается от «Тип»/«Дата»/«Категория» — проверено
+   вживую) — .checkbox-row вынесен из потока абсолютным позиционированием, а
+   form-row получает запас снизу под него. Пояснения — не текст под формой, а
+   тултипы по ⓘ у каждого чекбокса (см. .tooltip-wrap/.info-icon ниже, тот же
+   паттерн, что в «Лимитах»/«Целях»), поэтому подписи короткие («Нал.», «Повтор.»)
+   и в одну строку, без переносов. Ширина #txAmountField — под пару чекбоксов
+   рядом (каждый: чекбокс + текст + значок ⓘ), а не под сам числовой инпут.
 */
 #txForm .form-row { margin-bottom: 26px; }
-#txAmountField { width: 100px; position: relative; }
+#txAmountField { width: 152px; position: relative; }
 #txAmountField > input { width: 100%; min-width: 0; }
 #txNoteField { width: 160px; }
 #txNoteField input { width: 100%; min-width: 0; }
 
-.checkbox-field { display: flex; position: absolute; top: 100%; left: 0; flex-direction: row !important; align-items: center; gap: 4px; cursor: pointer; margin-top: 6px; width: max-content; }
+.checkbox-row { display: flex; position: absolute; top: 100%; left: 0; gap: 14px; margin-top: 6px; white-space: nowrap; }
+.checkbox-field { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .checkbox-field input[type="checkbox"] { width: 13px; min-width: 0; height: 13px; margin: 0; flex-shrink: 0; }
 .checkbox-field span { font-size: 12px; color: var(--color-text-secondary); line-height: 1; white-space: nowrap; }
 .checkbox-field .info-icon { margin-left: 0; }

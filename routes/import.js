@@ -84,10 +84,13 @@ router.post('/', upload.single('file'), async (req, res) => {
   });
 
   const existsStmt = db.prepare(
-    'SELECT id FROM transactions WHERE date = ? AND type = ? AND category_id = ? AND amount = ? AND note = ? AND excluded_from_total = ?'
+    'SELECT id FROM transactions WHERE date = ? AND type = ? AND category_id = ? AND amount = ? AND note = ? AND excluded_from_total = ? AND is_recurring = ?'
   );
   const insertStmt = db.prepare(
-    'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  const demoteRecurringStmt = db.prepare(
+    'UPDATE transactions SET is_recurring = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1'
   );
 
   let imported = 0;
@@ -97,18 +100,26 @@ router.post('/', upload.single('file'), async (req, res) => {
   const sheetsProcessed = [];
 
   // Общая для обоих форматов часть: найти/создать категорию, пропустить дубль, вставить.
-  function importRow(date, type, amount, note, categoryName, excludedFromTotal = false) {
+  function importRow(date, type, amount, note, categoryName, excludedFromTotal = false, isRecurring = false) {
     if (!date || !type || amount === null || amount <= 0) { skippedInvalid++; return; }
     const fallbackCategory = type === 'expense' ? FALLBACK_EXPENSE_CATEGORY : FALLBACK_INCOME_CATEGORY;
     const name = categoryName || fallbackCategory;
     const excluded = excludedFromTotal ? 1 : 0;
+    const recurring = isRecurring ? 1 : 0;
 
     const { id: categoryId, created } = findOrCreateCategory(name, type);
     if (created) newCategories.add(`${name} (${type === 'expense' ? 'расход' : 'доход'})`);
 
-    if (existsStmt.get(date, type, categoryId, amount, note, excluded)) { skippedDuplicates++; return; }
+    if (existsStmt.get(date, type, categoryId, amount, note, excluded, recurring)) { skippedDuplicates++; return; }
 
-    insertStmt.run(date, type, categoryId, amount, note, excluded);
+    // Тот же инвариант, что в routes/transactions.js POST — не более одной
+    // активной повторяющейся операции на (категорию, тип). Обычный экспорт
+    // этого приложения не может нарушить его сам по себе (в БД-источнике
+    // инвариант уже соблюдён), но это защита на случай вручную отредактированного
+    // файла с несколькими «Повтор.=да» на одну категорию.
+    if (recurring) demoteRecurringStmt.run(categoryId, type);
+
+    insertStmt.run(date, type, categoryId, amount, note, excluded, recurring);
     imported++;
   }
 
@@ -119,10 +130,11 @@ router.post('/', upload.single('file'), async (req, res) => {
       // Собственный формат экспорта этого приложения (см. routes/export.js, лист
       // «Операции») — используется для бэкапа/переноса данных между устройствами:
       // один лист на оба типа операций, тип в столбце B, 1 строка заголовка.
-      // Столбец 6 «Метка» («нал.» или пусто) появился позже столбцов 1–5 и
-      // намеренно идёт последним (см. export.js) — старые файлы, экспортированные
-      // до этого изменения, его просто не имеют, cellText на несуществующей
-      // ячейке вернёт '', что корректно читается как «не нал.».
+      // Столбцы 6 «Метка» («нал.» или пусто) и 7 «Повтор.» («да» или пусто)
+      // появились позже столбцов 1–5 и намеренно идут последними (см. export.js)
+      // — старые файлы, экспортированные до этих изменений, их просто не имеют,
+      // cellText на несуществующей ячейке вернёт '', что корректно читается как
+      // «нет метки»/«не повторяется».
       if (name === 'Операции') {
         sheetsProcessed.push(name);
         for (let rowNum = 2; rowNum <= ws.rowCount; rowNum++) {
@@ -134,7 +146,8 @@ router.post('/', upload.single('file'), async (req, res) => {
           const note = cellText(row.getCell(5));
           const categoryName = cellText(row.getCell(3));
           const excludedFromTotal = cellText(row.getCell(6)).toLowerCase() === 'нал.';
-          importRow(date, type, amount, note, categoryName, excludedFromTotal);
+          const isRecurring = cellText(row.getCell(7)).toLowerCase() === 'да';
+          importRow(date, type, amount, note, categoryName, excludedFromTotal, isRecurring);
         }
         return;
       }

@@ -100,6 +100,18 @@ db.exec(`
     dismissed_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (category_id, limit_type, notification_type, period)
   );
+
+  -- «Пропустить» на карточке-подсказке повторяющейся операции (см.
+  -- routes/recurring.js) — не для этого периода, но сама пометка is_recurring
+  -- на операции остаётся, подсказка вернётся в следующем периоде. ON DELETE
+  -- CASCADE — если удалить саму операцию-источник, её отклонённые подсказки
+  -- больше не нужны (иначе FK с foreign_keys=ON заблокировал бы удаление).
+  CREATE TABLE IF NOT EXISTS recurring_dismissals (
+    source_transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    period TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (source_transaction_id, period)
+  );
 `);
 
 // Миграция: колонка rollup_id могла отсутствовать в базе, созданной до появления целей.
@@ -126,6 +138,13 @@ if (!categoryColumns.includes('yearly_limit')) {
 const transactionColumns = db.prepare('PRAGMA table_info(transactions)').all().map((c) => c.name);
 if (!transactionColumns.includes('excluded_from_total')) {
   db.exec('ALTER TABLE transactions ADD COLUMN excluded_from_total INTEGER NOT NULL DEFAULT 0');
+}
+// Повторяющаяся операция (см. routes/recurring.js) — не более одной активной
+// на (category_id, type) одновременно, это инвариант, который поддерживают
+// сами роуты записи (transactions.js POST/PUT и recurring.js confirm снимают
+// флаг со старой при установке на новую), а не проверка в БД.
+if (!transactionColumns.includes('is_recurring')) {
+  db.exec('ALTER TABLE transactions ADD COLUMN is_recurring INTEGER NOT NULL DEFAULT 0');
 }
 
 const DEFAULT_EXPENSE_CATEGORIES = [
@@ -164,6 +183,7 @@ db.resetAllData = db.transaction(() => {
   db.exec('DELETE FROM goals');
   db.exec('DELETE FROM categories');
   db.exec('DELETE FROM limit_notification_dismissals');
+  db.exec('DELETE FROM recurring_dismissals');
   insertDefaultCategories();
 });
 

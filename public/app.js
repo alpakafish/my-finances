@@ -365,6 +365,7 @@ document.getElementById('txTypeToggle').addEventListener('click', (e) => {
 document.getElementById('txForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const excludedCheckbox = document.getElementById('txExcludedFromTotal');
+  const recurringCheckbox = document.getElementById('txRecurring');
   const payload = {
     type: txType,
     date: document.getElementById('txDate').value,
@@ -372,6 +373,7 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
     amount: Number(document.getElementById('txAmount').value),
     note: document.getElementById('txNote').value,
     excluded_from_total: excludedCheckbox.checked,
+    is_recurring: recurringCheckbox.checked,
   };
   try {
     await api('/api/transactions', { method: 'POST', body: JSON.stringify(payload) });
@@ -379,6 +381,7 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
     document.getElementById('txAmount').value = '';
     document.getElementById('txNote').value = '';
     excludedCheckbox.checked = false;
+    recurringCheckbox.checked = false;
     toast('Операция добавлена');
     await loadTransactionsTable();
     refreshDashboard();
@@ -394,13 +397,64 @@ document.getElementById('txFilterType').addEventListener('click', (e) => {
   loadTransactionsTable();
 });
 
+// ---------- Recurring transaction suggestions ----------
+// Карточки над списком операций: «Зарплата — повторяется, добавить за этот
+// месяц?» — см. чекбокс «Повтор.» в форме выше и routes/recurring.js.
+async function loadRecurringSuggestions(month) {
+  const container = document.getElementById('recurringSuggestions');
+  const suggestions = await api(`/api/recurring/suggestions?month=${month}`);
+  if (!suggestions.length) { container.innerHTML = ''; return; }
+
+  container.innerHTML = suggestions.map((s) => `
+    <div class="recurring-suggestion" data-source-id="${s.source_id}">
+      <span class="recurring-icon">↻</span>
+      <div class="recurring-suggestion-text">
+        <div class="recurring-suggestion-title">${s.category_name} — повторяется ежемесячно</div>
+        <div class="recurring-suggestion-meta">В прошлый раз: ${fmt(s.amount)}</div>
+      </div>
+      <input type="number" class="recurring-amount-input" min="0" step="0.01" value="${s.amount}">
+      <button type="button" class="btn small recurring-confirm-btn">Добавить</button>
+      <button type="button" class="recurring-suggestion-skip">Пропустить</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.recurring-suggestion').forEach((el) => {
+    const sourceId = el.dataset.sourceId;
+
+    el.querySelector('.recurring-confirm-btn').addEventListener('click', async () => {
+      const amount = Number(el.querySelector('.recurring-amount-input').value);
+      if (!(amount > 0)) { toast('Сумма должна быть больше нуля', true); return; }
+      try {
+        await api(`/api/recurring/${sourceId}/confirm`, { method: 'POST', body: JSON.stringify({ month, amount }) });
+        invalidateUndo();
+        toast('Операция добавлена');
+        await loadTransactionsTable();
+        refreshDashboard();
+      } catch (e) { toast(e.message, true); }
+    });
+
+    el.querySelector('.recurring-suggestion-skip').addEventListener('click', async () => {
+      try {
+        await api(`/api/recurring/${sourceId}/skip`, { method: 'POST', body: JSON.stringify({ month }) });
+        el.remove();
+      } catch (e) { toast(e.message, true); }
+    });
+  });
+}
+
 // ---------- Transactions table ----------
 let currentTxRows = [];
 
 async function loadTransactionsTable() {
   const month = document.getElementById('txMonthSelect').value;
   const typeParam = txFilterType === 'all' ? '' : `&type=${txFilterType}`;
-  const rows = await api(`/api/transactions?month=${month}${typeParam}`);
+  // Подсказки грузятся параллельно и до early-return ниже (rows.length === 0) —
+  // это как раз самый частый случай, когда они нужны: только что открытый
+  // месяц, где ещё вообще ничего не внесено.
+  const [rows] = await Promise.all([
+    api(`/api/transactions?month=${month}${typeParam}`),
+    loadRecurringSuggestions(month),
+  ]);
   currentTxRows = rows;
   const tbody = document.getElementById('txTableBody');
   const emptyHint = document.getElementById('txEmptyHint');
@@ -415,7 +469,12 @@ async function loadTransactionsTable() {
       <td>${r.date}</td>
       <td>${r.type === 'expense' ? 'Расход' : 'Доход'}</td>
       <td>${r.category_name}</td>
-      <td class="amount-${r.type}">${fmt(r.amount)}${r.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : ''}</td>
+      <td class="amount-${r.type}">${fmt(r.amount)}${r.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : ''}${r.is_recurring ? `
+        <span class="tooltip-wrap recurring-badge-wrap">
+          <span class="recurring-badge">↻</span>
+          <div class="tooltip-box">Повторяется каждый месяц. Чтобы отключить — нажмите ✎ и снимите галочку «повторять каждый месяц».</div>
+        </span>
+      ` : ''}</td>
       <td>${r.note || ''}</td>
       <td class="row-actions">
         <button data-role="edit" title="Изменить">✎</button>
@@ -429,7 +488,7 @@ async function loadTransactionsTable() {
       const id = btn.closest('tr').dataset.id;
       const tx = currentTxRows.find((r) => String(r.id) === String(id));
       await api(`/api/transactions/${id}`, { method: 'DELETE' });
-      pendingUndo = tx ? { date: tx.date, type: tx.type, category_id: tx.category_id, amount: tx.amount, note: tx.note, excluded_from_total: tx.excluded_from_total } : null;
+      pendingUndo = tx ? { date: tx.date, type: tx.type, category_id: tx.category_id, amount: tx.amount, note: tx.note, excluded_from_total: tx.excluded_from_total, is_recurring: tx.is_recurring } : null;
       toast('Операция удалена', false, 2500, pendingUndo ? undoLastDelete : null);
       await loadTransactionsTable();
       refreshDashboard();
@@ -471,6 +530,9 @@ function renderTxEditRow(tx) {
       <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;">
         <input type="checkbox" class="edit-excluded" ${tx.excluded_from_total ? 'checked' : ''}> нал., не в общей сумме
       </label>
+      <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;">
+        <input type="checkbox" class="edit-recurring" ${tx.is_recurring ? 'checked' : ''}> повторять каждый месяц
+      </label>
     </td>
     <td class="row-actions">
       <button data-role="save-edit" title="Сохранить">✓</button>
@@ -492,6 +554,7 @@ function renderTxEditRow(tx) {
       amount: Number(row.querySelector('.edit-amount').value),
       note: row.querySelector('.edit-note').value,
       excluded_from_total: row.querySelector('.edit-excluded').checked,
+      is_recurring: row.querySelector('.edit-recurring').checked,
     };
     if (!payload.date || !payload.category_id || !(payload.amount > 0)) {
       toast('Заполните дату, категорию и сумму (> 0)', true);
@@ -1373,9 +1436,15 @@ const TOUR_STEPS = [
   },
   {
     tab: 'transactions',
-    selector: '.checkbox-field',
+    selector: '#txExcludedField',
     title: 'Наличные, мимо общей суммы',
-    text: 'Отметьте «Нал., не в общей сумме» для дохода наличными (или расхода), который не должен раздувать официальные цифры — например, деньги мимо основного счёта. Такая операция получит пометку «нал.», не войдёт в общий доход/расход за месяц и год, в Баланс и в Excel-сводку — но будет учитываться в разбивке по категориям, на графиках и на вкладке «По годам», как обычная.',
+    text: 'Отметьте «Нал.» для дохода наличными (или расхода), который не должен раздувать официальные цифры — например, деньги мимо основного счёта. Такая операция получит пометку «нал.», не войдёт в общий доход/расход за месяц и год, в Баланс и в Excel-сводку — но будет учитываться в разбивке по категориям, на графиках и на вкладке «По годам», как обычная. Подробности — под значком ⓘ рядом.',
+  },
+  {
+    tab: 'transactions',
+    selector: '#txRecurringField',
+    title: 'Повторяющиеся операции',
+    text: 'Отметьте «Повтор.» для зарплаты, аренды, подписок — того, что вносится каждый месяц. Когда откроете новый месяц, где такой операции ещё нет, над списком появится подсказка добавить её снова (сумму можно поправить) или пропустить на этот месяц. Отключить повтор — кнопкой ✎ у последней такой операции в списке ниже.',
   },
   {
     tab: 'transactions',
