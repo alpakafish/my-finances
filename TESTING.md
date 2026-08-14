@@ -51,6 +51,7 @@ is there.
 | 2026-08-14 | Category rename to a whitespace-only name silently blanked it (`PUT` didn't validate; `POST` did). | `test/server.test.js` → `category validation: whitespace-only rename rejected...` | |
 | 2026-08-14 | Category delete-with-reassign didn't validate the target category existed or matched type — could silently reassign expenses onto an income category. | `test/server.test.js` → same test as above | UI already only offers same-type targets, so this is defense-in-depth for the API itself. |
 | 2026-08-14 | Goal `duration_months`/`target_amount` accepted invalid values (0, negative, fractional months) on both create and edit, breaking the deadline math downstream. | `test/server.test.js` → `goal validation: duration_months must be a positive integer...` | |
+| 2026-08-14 | Dashboard tab didn't refetch its data on switching to it — only the "По годам"/"Лимиты" tabs reloaded on click. Data changed outside the currently-loaded Dashboard view (e.g. a direct API call, or in principle a second window/tab against the same `DATA_DIR`) stayed invisible until a full page reload. Found via user report: an overall-budget notification (always computed fresh server-side) showed a higher "потрачено" than the Dashboard's own "Расход" headline for the same month, because the Dashboard hadn't refetched since data was added via `curl` during manual testing. | *(no automated test — frontend-only, see "Known gap" above)* | Fixed by adding `if (btn.dataset.tab === 'dashboard') refreshDashboard();` to the tab-click handler in `public/app.js`, matching the existing reload-on-click pattern already used by `years`/`limits`. Verified manually in browser preview: added a transaction via a direct `POST /api/transactions` call while Dashboard was already loaded and showing the old total, switched to another tab and back without reloading the page, confirmed new `/api/summary`/`/api/limits/*` requests fired and the displayed totals updated. |
 
 ## What's covered but not bug-driven
 
@@ -66,4 +67,15 @@ one-active-template-per-category+type invariant), automatic backups
 (creation on startup, retention pruning, failure/dismiss notification), and
 the transactions-list `category_id` filter (combines with `type` via AND;
 the note/amount search and the "search drops the month filter" behavior are
-frontend-only, see the "known gap" above).
+frontend-only, see the "known gap" above), the overall monthly budget
+(validation, progress correctly excludes «нал.» and is unaffected by
+rollup, notification/dismiss, value reset by `delete-all-data`), and the
+deleted-transactions trash (`deleted_transactions` table: keeps only the
+last 10 with the oldest trimmed, restore round-trips into `transactions`,
+restoring a stale/already-restored id 404s instead of 500ing, restoring into
+a category deleted after the fact 409s, wiped by `delete-all-data`). The
+frontend half of the trash — the Cmd/Ctrl+Z shortcut now always retrying
+against whatever is currently in the trash (instead of the old
+single-slot "invalidated by any other action" undo), the toast's
+"Отменить"/"Открыть бэкапы" action button, and the «Корзина» card's
+restore buttons — is manual-only, same known gap as above.

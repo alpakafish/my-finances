@@ -43,6 +43,41 @@ router.post('/', (req, res) => {
   res.status(201).json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(id));
 });
 
+// ---------- Корзина удалённых операций (см. db.js deleted_transactions) ----------
+// Статичные пути — до router.delete('/:id') ниже, хотя коллизии тут в
+// принципе нет (разные методы/литеральный путь), просто для единообразия с
+// тем же приёмом в routes/limits.js.
+router.get('/trash', (req, res) => {
+  const rows = db.prepare('SELECT * FROM deleted_transactions ORDER BY id DESC LIMIT 10').all();
+  res.json(rows);
+});
+
+router.post('/trash/:id/restore', (req, res) => {
+  const trashed = db.prepare('SELECT * FROM deleted_transactions WHERE id = ?').get(req.params.id);
+  if (!trashed) {
+    return res.status(404).json({
+      error: 'Эта операция уже не в корзине — либо восстановлена, либо вытеснена более новыми удалениями (хранятся последние 10)',
+    });
+  }
+  const category = db.prepare('SELECT id FROM categories WHERE id = ?').get(trashed.category_id);
+  if (!category) {
+    return res.status(409).json({ error: `Категория «${trashed.category_name}» была удалена — восстановить операцию в неё нельзя` });
+  }
+  const restore = db.transaction(() => {
+    if (trashed.is_recurring) {
+      db.prepare('UPDATE transactions SET is_recurring = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1')
+        .run(trashed.category_id, trashed.type);
+    }
+    const id = db.prepare(
+      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(trashed.date, trashed.type, trashed.category_id, trashed.amount, trashed.note, trashed.excluded_from_total, trashed.is_recurring).lastInsertRowid;
+    db.prepare('DELETE FROM deleted_transactions WHERE id = ?').run(req.params.id);
+    return id;
+  });
+  const id = restore();
+  res.status(201).json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(id));
+});
+
 router.put('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Операция не найдена' });
@@ -77,7 +112,28 @@ router.put('/:id', (req, res) => {
 });
 
 router.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
+  const existing = db.prepare(`
+    SELECT t.*, c.name AS category_name
+    FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+    WHERE t.id = ?
+  `).get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Операция не найдена' });
+  const del = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO deleted_transactions (date, type, category_id, category_name, amount, note, excluded_from_total, is_recurring)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      existing.date, existing.type, existing.category_id, existing.category_name,
+      existing.amount, existing.note, existing.excluded_from_total, existing.is_recurring
+    );
+    db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
+    // Держим только последние 10 — старше см. в бэкапах (backup.js).
+    db.prepare(`
+      DELETE FROM deleted_transactions
+      WHERE id NOT IN (SELECT id FROM deleted_transactions ORDER BY id DESC LIMIT 10)
+    `).run();
+  });
+  del();
   res.status(204).end();
 });
 

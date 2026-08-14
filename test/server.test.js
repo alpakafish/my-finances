@@ -688,3 +688,152 @@ test('transactions list: category_id filter, and combines with type — month is
   const mismatched = await (await fetch(`${baseUrl}/api/transactions?category_id=${food.id}&type=income`)).json();
   assert.equal(mismatched.length, 0);
 });
+
+test('overall monthly budget: validation, progress excludes "нал." and ignores rollup, notification + dismiss, cleared by delete-all-data', async () => {
+  // Свой процесс/БД — нужны предсказуемые суммы за месяц, без операций из других тестов файла.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-overall-budget-'));
+  const { proc, baseUrl: obBaseUrl } = await startServer(dir);
+  try {
+    const initial = await (await fetch(`${obBaseUrl}/api/limits/overall`)).json();
+    assert.equal(initial.monthly_limit, null, 'unset by default');
+
+    const zeroRes = await fetch(`${obBaseUrl}/api/limits/overall`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_limit: 0 }),
+    });
+    assert.equal(zeroRes.status, 400);
+
+    const setRes = await fetch(`${obBaseUrl}/api/limits/overall`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_limit: 1000 }),
+    });
+    assert.equal(setRes.status, 200);
+    assert.equal((await setRes.json()).monthly_limit, 1000);
+
+    const categories = await (await fetch(`${obBaseUrl}/api/categories`)).json();
+    const food = categories.find((c) => c.name === 'Еда');
+    const savings = categories.find((c) => c.name === 'Сбережения');
+    const month = new Date().toISOString().slice(0, 7);
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Обычный расход — считается. "Нал." — не считается (как "Расход" в шапке
+    // Дашборда). Цель с rollup_id → savings — считается по факту операции, а не
+    // "сворачивается" куда-то ещё: общий бюджет суммирует все категории расходов
+    // сразу, поэтому rollup здесь в принципе не может ничего изменить.
+    await fetch(`${obBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: today, type: 'expense', category_id: food.id, amount: 600, note: '' }),
+    });
+    await fetch(`${obBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: today, type: 'expense', category_id: food.id, amount: 5000, note: '', excluded_from_total: true }),
+    });
+    await fetch(`${obBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: today, type: 'expense', category_id: savings.id, amount: 350, note: '' }),
+    });
+
+    const progress = await (await fetch(`${obBaseUrl}/api/limits/overall/progress?month=${month}`)).json();
+    assert.equal(progress.spent, 950, '600 + 350 — the "нал." 5000 must not count');
+    assert.equal(progress.pct, 95);
+    assert.equal(progress.exceeded, false);
+
+    let notifications = await (await fetch(`${obBaseUrl}/api/limits/notifications`)).json();
+    let overallNotif = notifications.find((n) => n.overall);
+    assert.equal(overallNotif?.notification_type, 'approaching');
+
+    // Дошли до превышения — новое событие, закрытие "approaching" на него не влияет.
+    await fetch(`${obBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: today, type: 'expense', category_id: food.id, amount: 100, note: '' }),
+    });
+    notifications = await (await fetch(`${obBaseUrl}/api/limits/notifications`)).json();
+    overallNotif = notifications.find((n) => n.overall);
+    assert.equal(overallNotif?.notification_type, 'exceeded');
+
+    const dismissRes = await fetch(`${obBaseUrl}/api/limits/overall/notifications/dismiss`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notification_type: 'exceeded', period: month }),
+    });
+    assert.equal(dismissRes.status, 204);
+    notifications = await (await fetch(`${obBaseUrl}/api/limits/notifications`)).json();
+    assert.ok(!notifications.some((n) => n.overall), 'dismissed');
+
+    // Изменение суммы бюджета сбрасывает закрытие, как у лимитов категорий.
+    await fetch(`${obBaseUrl}/api/limits/overall`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthly_limit: 1050 }),
+    });
+    notifications = await (await fetch(`${obBaseUrl}/api/limits/notifications`)).json();
+    assert.ok(notifications.some((n) => n.overall), 'changing the budget value un-dismisses notifications for it');
+
+    // "Удалить все данные" — общий бюджет это финансовое планирование, не настройка
+    // приложения (в отличие от currency/onboarding_seen), должен сброситься тоже.
+    await fetch(`${obBaseUrl}/api/settings/all-data`, { method: 'DELETE' });
+    const afterWipe = await (await fetch(`${obBaseUrl}/api/limits/overall`)).json();
+    assert.equal(afterWipe.monthly_limit, null);
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});
+
+test('trash (deleted-transactions): keeps last 10 with oldest trimmed, restore round-trips, stale/foreign-category restores rejected, wiped by delete-all-data', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-trash-'));
+  const { proc, baseUrl: trashBaseUrl } = await startServer(dir);
+  try {
+    const categories = await (await fetch(`${trashBaseUrl}/api/categories`)).json();
+    const food = categories.find((c) => c.name === 'Еда');
+
+    // 11 удалений подряд — 11-е должно вытеснить самое первое (хранятся только последние 10).
+    for (let i = 1; i <= 11; i++) {
+      const created = await (await fetch(`${trashBaseUrl}/api/transactions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: '2026-08-01', type: 'expense', category_id: food.id, amount: i, note: `trash-${i}` }),
+      })).json();
+      const delRes = await fetch(`${trashBaseUrl}/api/transactions/${created.id}`, { method: 'DELETE' });
+      assert.equal(delRes.status, 204);
+    }
+    const trash = await (await fetch(`${trashBaseUrl}/api/transactions/trash`)).json();
+    assert.equal(trash.length, 10, 'only the last 10 deletions are kept');
+    assert.ok(!trash.some((t) => t.note === 'trash-1'), 'the oldest (11th deletion ago) is trimmed');
+    assert.ok(trash.some((t) => t.note === 'trash-11'), 'the most recent deletion is kept');
+    assert.equal(trash[0].note, 'trash-11', 'newest deletion first');
+
+    // Восстановление — новая операция появляется, запись уходит из корзины.
+    const restoreRes = await fetch(`${trashBaseUrl}/api/transactions/trash/${trash[0].id}/restore`, { method: 'POST' });
+    assert.equal(restoreRes.status, 201);
+    const restored = await restoreRes.json();
+    assert.equal(restored.note, 'trash-11');
+    assert.equal(restored.amount, 11);
+    const monthList = await (await fetch(`${trashBaseUrl}/api/transactions?month=2026-08`)).json();
+    assert.ok(monthList.some((t) => t.id === restored.id));
+    const trashAfterRestore = await (await fetch(`${trashBaseUrl}/api/transactions/trash`)).json();
+    assert.equal(trashAfterRestore.length, 9);
+
+    // Повторное восстановление того же (уже не в корзине) id — 404, не 500.
+    const staleRestoreRes = await fetch(`${trashBaseUrl}/api/transactions/trash/${trash[0].id}/restore`, { method: 'POST' });
+    assert.equal(staleRestoreRes.status, 404);
+
+    // Категорию удалили, пока операция лежала в корзине — восстановить в неё нельзя.
+    const orphanCat = await (await fetch(`${trashBaseUrl}/api/categories`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Категория для корзины', type: 'expense', color: '#123456' }),
+    })).json();
+    const orphanTx = await (await fetch(`${trashBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: '2026-08-01', type: 'expense', category_id: orphanCat.id, amount: 50, note: 'orphan' }),
+    })).json();
+    await fetch(`${trashBaseUrl}/api/transactions/${orphanTx.id}`, { method: 'DELETE' });
+    const trashWithOrphan = await (await fetch(`${trashBaseUrl}/api/transactions/trash`)).json();
+    const orphanTrashEntry = trashWithOrphan.find((t) => t.note === 'orphan');
+    await fetch(`${trashBaseUrl}/api/categories/${orphanCat.id}`, { method: 'DELETE' }); // без live-операций — удаляется сразу
+    const orphanRestoreRes = await fetch(`${trashBaseUrl}/api/transactions/trash/${orphanTrashEntry.id}/restore`, { method: 'POST' });
+    assert.equal(orphanRestoreRes.status, 409);
+
+    // "Удалить все данные" стирает и корзину, не только сами операции.
+    await fetch(`${trashBaseUrl}/api/settings/all-data`, { method: 'DELETE' });
+    const trashAfterWipe = await (await fetch(`${trashBaseUrl}/api/transactions/trash`)).json();
+    assert.equal(trashAfterWipe.length, 0);
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});

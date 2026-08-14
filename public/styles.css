@@ -164,6 +164,16 @@ h1 { font-size: 22px; font-weight: 600; }
 .cat-bar.exceeded { background: var(--color-expense) !important; }
 .limit-val { width: 150px; }
 
+/* Общий бюджет на месяц — крупнее и заметнее строк .cat-row по категориям
+   (это "главный" лимит, не один из списка), см. loadMonthlyLimitsProgress в app.js. */
+.overall-budget-row { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--color-border-subtle); }
+.overall-budget-header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+.overall-budget-label { font-weight: 500; color: var(--color-text); }
+.overall-budget-values { color: var(--color-text-secondary); white-space: nowrap; }
+.overall-budget-bar-wrap { height: 8px; background: var(--color-border-subtle); border-radius: 4px; overflow: hidden; }
+.overall-budget-bar { height: 8px; border-radius: 4px; background: var(--color-insight-new); }
+.overall-budget-bar.exceeded { background: var(--color-expense); }
+
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px 6px; font-size: 13px; border-bottom: 1px solid var(--color-border-subtle); color: var(--color-text); }
 th { color: var(--color-text-tertiary); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -304,6 +314,12 @@ td.amount-income { color: var(--color-income); }
 .toast-undo:hover { background: var(--overlay-on-chip-hover); }
 .toast-undo[hidden] { display: none; }
 .empty-hint { color: var(--color-text-faint); font-size: 13px; padding: 20px 0; text-align: center; }
+
+.trash-count { display: inline-block; background: var(--color-border-input); color: var(--color-text-secondary); border-radius: 999px; padding: 1px 7px; font-size: 11px; font-weight: 600; margin-left: 2px; text-transform: none; letter-spacing: normal; }
+.trash-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--color-border-subtle); font-size: 13px; }
+.trash-row:last-child { border-bottom: none; }
+.trash-row-info { color: var(--color-text-secondary); }
+.link-btn { background: none; border: none; padding: 0; color: var(--color-text); text-decoration: underline; cursor: pointer; font: inherit; }
 
 .settings-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .settings-row + .settings-row { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-border-subtle); }

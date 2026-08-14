@@ -140,38 +140,47 @@ async function api(path, options = {}) {
     const body = await res.json().catch(() => ({}));
     const err = new Error(body.error || `Ошибка запроса: ${res.status}`);
     err.body = body;
+    err.status = res.status;
     throw err;
   }
   if (res.status === 204) return null;
   return res.json();
 }
 
-function toast(message, isError = false, duration = 2500, action = null) {
+function toast(message, isError = false, duration = 2500, action = null, actionLabel = 'Отменить') {
   const el = document.getElementById('toast');
   const undoBtn = document.getElementById('toastUndoBtn');
   document.getElementById('toastMsg').textContent = message;
   el.className = 'toast show' + (isError ? ' error' : '');
   undoBtn.hidden = !action;
+  document.getElementById('toastUndoLabel').textContent = actionLabel;
   undoBtn.onclick = action ? () => { action(); el.className = 'toast'; clearTimeout(toast._t); } : null;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { el.className = 'toast'; }, action ? Math.max(duration, 8000) : duration);
 }
 
-// ---------- Undo (пока доступна только отмена удаления операции) ----------
-// Живёт до следующего изменения данных — не по таймеру: если тост уже скрылся,
-// Cmd/Ctrl+Z всё ещё восстановит операцию, пока ничего другого не поменялось.
-let pendingUndo = null;
-function invalidateUndo() { pendingUndo = null; }
-
+// ---------- Корзина удалённых операций (public/../db.js: deleted_transactions) ----------
+// Раньше отмена удаления жила только в памяти вкладки и работала только для
+// самого последнего удаления, сбрасываясь при любом другом действии (см. git
+// history). Теперь источник правды — бэкенд: хранит последние 10 удалений,
+// переживает перезапуск приложения, и Cmd/Ctrl+Z всегда пробует восстановить
+// самое последнее из них, независимо от того, что произошло с тех пор.
 async function undoLastDelete() {
-  if (!pendingUndo) return;
-  const restore = pendingUndo;
-  pendingUndo = null;
+  let trash;
+  try { trash = await api('/api/transactions/trash'); } catch (e) { return; }
+  if (!trash.length) {
+    toast(
+      'Нечего восстанавливать — последние 10 удалений уже разобраны. Операции постарше можно найти в бэкапе.',
+      false, 6000, openBackupsFolder, 'Открыть бэкапы'
+    );
+    return;
+  }
   try {
-    await api('/api/transactions', { method: 'POST', body: JSON.stringify(restore) });
+    await api(`/api/transactions/trash/${trash[0].id}/restore`, { method: 'POST' });
     toast('Удаление отменено');
     await loadTransactionsTable();
     refreshDashboard();
+    await refreshTrashCard();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -179,10 +188,60 @@ document.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.key.toLowerCase() !== 'z') return;
   const t = e.target;
   const isEditable = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
-  if (isEditable || !pendingUndo) return;
+  if (isEditable) return;
   e.preventDefault();
   undoLastDelete();
 });
+
+// Карточка «Корзина» внизу вкладки «Операции» — видна всегда (а не только
+// когда там что-то есть), чтобы место в интерфейсе, о котором пишет тост при
+// удалении, было предсказуемым и не появлялось из ниоткуда.
+function trashRowLabel(row) {
+  const sign = row.type === 'expense' ? '−' : '+';
+  const cash = row.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : '';
+  return `${row.date} · ${row.category_name} · ${sign}${fmt(row.amount)}${cash}${row.note ? ` · ${row.note}` : ''}`;
+}
+
+async function refreshTrashCard() {
+  let trash;
+  try { trash = await api('/api/transactions/trash'); } catch (e) { return; }
+  const countEl = document.getElementById('trashCount');
+  countEl.textContent = trash.length;
+  countEl.hidden = trash.length === 0;
+
+  const list = document.getElementById('trashList');
+  const emptyHint = document.getElementById('trashEmptyHint');
+  if (!trash.length) {
+    list.innerHTML = '';
+    emptyHint.style.display = 'block';
+    return;
+  }
+  emptyHint.style.display = 'none';
+  list.innerHTML = trash.map((row) => `
+    <div class="trash-row" data-id="${row.id}">
+      <span class="trash-row-info">${trashRowLabel(row)}</span>
+      <button type="button" class="btn small secondary" data-role="trash-restore">Восстановить</button>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('[data-role="trash-restore"]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.closest('.trash-row').dataset.id;
+      btn.disabled = true;
+      try {
+        await api(`/api/transactions/trash/${id}/restore`, { method: 'POST' });
+        toast('Операция восстановлена');
+        await loadTransactionsTable();
+        refreshDashboard();
+        await refreshTrashCard();
+      } catch (e) {
+        toast(e.message, true);
+        btn.disabled = false;
+      }
+    });
+  });
+}
+document.getElementById('trashOpenBackupsBtn').addEventListener('click', openBackupsFolder);
 
 // ---------- Confirm modal ----------
 function showConfirmModal({ title, text, confirmLabel = 'Удалить', onConfirm }) {
@@ -244,6 +303,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
     if (btn.dataset.tab === 'years') loadYearsTab();
     if (btn.dataset.tab === 'limits') loadLimitsTab();
+    if (btn.dataset.tab === 'dashboard') refreshDashboard();
   });
 });
 
@@ -316,7 +376,6 @@ function renderCategoryManageLists() {
         const color = row.querySelector('[data-role="color"]').value;
         try {
           await api(`/api/categories/${id}`, { method: 'PUT', body: JSON.stringify({ name, color }) });
-          invalidateUndo();
           toast('Категория обновлена');
           await loadCategories();
           refreshDashboard();
@@ -326,7 +385,6 @@ function renderCategoryManageLists() {
         const categoryName = row.querySelector('[data-role="name"]').value;
         try {
           await api(`/api/categories/${id}`, { method: 'DELETE' });
-          invalidateUndo();
           toast('Категория удалена');
           await loadCategories();
           refreshDashboard();
@@ -340,7 +398,6 @@ function renderCategoryManageLists() {
             onReassign: async (targetId) => {
               try {
                 await api(`/api/categories/${id}?reassignTo=${targetId}`, { method: 'DELETE' });
-                invalidateUndo();
                 toast('Операции перенесены, категория удалена');
                 await loadCategories();
                 await loadTransactionsTable();
@@ -351,7 +408,6 @@ function renderCategoryManageLists() {
             onDeleteTransactions: async () => {
               try {
                 await api(`/api/categories/${id}?deleteTransactions=true`, { method: 'DELETE' });
-                invalidateUndo();
                 toast('Операции и категория удалены');
                 await loadCategories();
                 await loadTransactionsTable();
@@ -378,7 +434,6 @@ async function addCategory(type, nameId, colorId) {
   if (!name) return;
   try {
     await api('/api/categories', { method: 'POST', body: JSON.stringify({ name, type, color: colorEl.value }) });
-    invalidateUndo();
     nameEl.value = '';
     toast('Категория добавлена');
     await loadCategories();
@@ -410,7 +465,6 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
   };
   try {
     await api('/api/transactions', { method: 'POST', body: JSON.stringify(payload) });
-    invalidateUndo();
     document.getElementById('txAmount').value = '';
     document.getElementById('txNote').value = '';
     excludedCheckbox.checked = false;
@@ -485,7 +539,6 @@ async function loadRecurringSuggestions(month) {
       if (!(amount > 0)) { toast('Сумма должна быть больше нуля', true); return; }
       try {
         await api(`/api/recurring/${sourceId}/confirm`, { method: 'POST', body: JSON.stringify({ month, amount }) });
-        invalidateUndo();
         toast('Операция добавлена');
         await loadTransactionsTable();
         refreshDashboard();
@@ -587,12 +640,11 @@ async function loadTransactionsTable() {
   tbody.querySelectorAll('[data-role="delete"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const id = btn.closest('tr').dataset.id;
-      const tx = currentTxRows.find((r) => String(r.id) === String(id));
       await api(`/api/transactions/${id}`, { method: 'DELETE' });
-      pendingUndo = tx ? { date: tx.date, type: tx.type, category_id: tx.category_id, amount: tx.amount, note: tx.note, excluded_from_total: tx.excluded_from_total, is_recurring: tx.is_recurring } : null;
-      toast('Операция удалена', false, 2500, pendingUndo ? undoLastDelete : null);
+      toast('Операция удалена. Последние 10 удалений можно вернуть в Корзине внизу вкладки «Операции».', false, 4000, undoLastDelete);
       await loadTransactionsTable();
       refreshDashboard();
+      await refreshTrashCard();
     });
   });
 
@@ -663,7 +715,6 @@ function renderTxEditRow(tx) {
     }
     try {
       await api(`/api/transactions/${tx.id}`, { method: 'PUT', body: JSON.stringify(payload) });
-      invalidateUndo();
       toast('Операция изменена');
       await loadTransactionsTable();
       refreshDashboard();
@@ -945,11 +996,34 @@ function renderLimitRow(row) {
   `;
 }
 
+// Общий бюджет на месяц — не строка в списке категорий (renderLimitRow выше),
+// а отдельный, более заметный блок над ним: не привязан к категории, поэтому
+// нет ни .cat-dot, ни фиксированной ширины названия под самое длинное имя
+// категории. См. .overall-budget-* в styles.css.
+function renderOverallBudgetRow(data) {
+  return `
+    <div class="overall-budget-row">
+      <div class="overall-budget-header">
+        <span class="overall-budget-label">Общий бюджет на месяц</span>
+        <span class="overall-budget-values">${fmt(data.spent)} из ${fmt(data.limit)} (${Math.min(999, data.pct)}%)</span>
+      </div>
+      <div class="overall-budget-bar-wrap"><div class="overall-budget-bar${data.exceeded ? ' exceeded' : ''}" style="width:${Math.min(100, data.pct)}%;"></div></div>
+    </div>
+  `;
+}
+
 // Следует за выбранным на Дашборде месяцем (см. currentMonth) — как и остальной
 // блок «Отчёт за месяц», под которым эта карточка расположена.
 async function loadMonthlyLimitsProgress() {
-  const rows = await api(`/api/limits/progress?month=${currentMonth}`);
-  document.getElementById('monthlyLimitsCard').hidden = rows.length === 0;
+  const [rows, overall] = await Promise.all([
+    api(`/api/limits/progress?month=${currentMonth}`),
+    api(`/api/limits/overall/progress?month=${currentMonth}`),
+  ]);
+  const hasOverall = overall.limit !== null;
+  document.getElementById('monthlyLimitsCard').hidden = rows.length === 0 && !hasOverall;
+  const overallSection = document.getElementById('overallBudgetSection');
+  overallSection.hidden = !hasOverall;
+  overallSection.innerHTML = hasOverall ? renderOverallBudgetRow(overall) : '';
   document.getElementById('monthlyLimitsList').innerHTML = rows.map(renderLimitRow).join('');
 }
 
@@ -963,10 +1037,32 @@ async function loadYearlyLimitsProgress() {
   document.getElementById('yearlyLimitsList').innerHTML = rows.map(renderLimitRow).join('');
 }
 
+// Общий бюджет на месяц (верх вкладки «Лимиты», не привязан к категории) —
+// значение перечитывается при каждом заходе на вкладку, как и сами категории
+// ниже, на случай если поменяли на другой вкладке/устройстве.
+async function loadOverallBudgetSetting() {
+  const { monthly_limit } = await api('/api/limits/overall');
+  document.getElementById('overallBudgetInput').value = monthly_limit ?? '';
+}
+
+document.getElementById('overallBudgetSaveBtn').addEventListener('click', async () => {
+  const val = document.getElementById('overallBudgetInput').value;
+  try {
+    await api('/api/limits/overall', {
+      method: 'PUT',
+      body: JSON.stringify({ monthly_limit: val === '' ? null : Number(val) }),
+    });
+    toast('Общий бюджет сохранён');
+    await loadMonthlyLimitsProgress();
+    await loadLimitNotifications();
+  } catch (e) { toast(e.message, true); }
+});
+
 // Вкладка «Лимиты» — настройка месячного/годового лимита по каждой категории
 // расходов. Перерисовывается при каждом заходе на вкладку (см. обработчик кликов
 // по .tab-btn ниже), как и «По годам» — категории могли измениться.
 async function loadLimitsTab() {
+  await loadOverallBudgetSetting();
   const cats = await api('/api/categories?type=expense');
   const container = document.getElementById('limitsCatList');
   container.innerHTML = cats.map((c) => `
@@ -1012,9 +1108,12 @@ async function loadLimitsTab() {
 // сейчас просматривается на Дашборде/«По годам». Не исчезают сами — только по
 // крестику; закрытие помнится на бэкенде до конца периода (месяца/года).
 function limitNotificationMessage(n) {
+  const verb = n.notification_type === 'exceeded' ? 'превышен' : 'почти исчерпан';
+  if (n.overall) {
+    return `Общий бюджет на месяц ${verb} (${n.pct}%) — потрачено ${fmt(n.spent)} из ${fmt(n.limit)} в этом месяце.`;
+  }
   const periodLabel = n.limit_type === 'month' ? 'в этом месяце' : 'в этом году';
   const limitLabel = n.limit_type === 'month' ? 'Месячный лимит' : 'Годовой лимит';
-  const verb = n.notification_type === 'exceeded' ? 'превышен' : 'почти исчерпан';
   return `${limitLabel} категории «${n.category_name}» ${verb} (${n.pct}%) — потрачено ${fmt(n.spent)} из ${fmt(n.limit)} ${periodLabel}.`;
 }
 
@@ -1027,7 +1126,7 @@ async function loadLimitNotifications() {
   const container = document.getElementById('limitNotificationsList');
   container.innerHTML = notifications.map((n) => `
     <div class="limit-notification${n.notification_type === 'exceeded' ? ' exceeded' : ''}"
-         data-category-id="${n.category_id}" data-limit-type="${n.limit_type}"
+         data-overall="${n.overall ? '1' : ''}" data-category-id="${n.category_id ?? ''}" data-limit-type="${n.limit_type}"
          data-notification-type="${n.notification_type}" data-period="${n.period}">
       <div>${limitNotificationMessage(n)}</div>
       <button type="button" class="limit-notification-close" aria-label="Закрыть">✕</button>
@@ -1038,7 +1137,10 @@ async function loadLimitNotifications() {
     el.querySelector('.limit-notification-close').addEventListener('click', async () => {
       el.remove();
       try {
-        await api(`/api/limits/notifications/${el.dataset.categoryId}/dismiss`, {
+        const dismissUrl = el.dataset.overall
+          ? '/api/limits/overall/notifications/dismiss'
+          : `/api/limits/notifications/${el.dataset.categoryId}/dismiss`;
+        await api(dismissUrl, {
           method: 'POST',
           body: JSON.stringify({
             limit_type: el.dataset.limitType,
@@ -1140,7 +1242,6 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
     const res = await fetch('/api/import', { method: 'POST', body: formData });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'Ошибка импорта');
-    invalidateUndo();
     const parts = [`Добавлено операций: ${body.imported}`];
     if (body.skippedDuplicates) parts.push(`пропущено дублей: ${body.skippedDuplicates}`);
     if (body.newCategories.length) parts.push(`новые категории: ${body.newCategories.join(', ')}`);
@@ -1205,7 +1306,6 @@ document.getElementById('goalForm').addEventListener('submit', async (e) => {
 
   try {
     await api('/api/goals', { method: 'POST', body: JSON.stringify(payload) });
-    invalidateUndo();
     toast('Цель создана');
     document.getElementById('goalForm').reset();
     document.getElementById('goalExistingCatRow').style.display = 'flex';
@@ -1279,7 +1379,6 @@ async function loadGoals() {
       if (!amount) return;
       try {
         await api(`/api/goals/${form.dataset.id}/contribute`, { method: 'POST', body: JSON.stringify({ amount }) });
-        invalidateUndo();
         toast('Взнос добавлен');
         await loadGoals();
         await loadTransactionsTable();
@@ -1292,7 +1391,6 @@ async function loadGoals() {
     btn.addEventListener('click', async () => {
       if (!confirm('Удалить цель? Уже внесённые деньги останутся в категории как есть.')) return;
       await api(`/api/goals/${btn.dataset.id}`, { method: 'DELETE' });
-      invalidateUndo();
       toast('Цель удалена');
       await loadGoals();
     });
@@ -1421,7 +1519,6 @@ document.getElementById('deleteAllDataBtn').addEventListener('click', () => {
     onConfirm: async () => {
       try {
         await api('/api/settings/all-data', { method: 'DELETE' });
-        invalidateUndo();
         toast('Все данные удалены');
         await loadCategories();
         await loadTransactionsTable();
@@ -1619,7 +1716,13 @@ const TOUR_STEPS = [
     tab: 'transactions',
     selector: '#txListCard',
     title: 'Операции — список, изменение и удаление',
-    text: 'Кнопка ✎ открывает редактирование прямо в строке — можно поменять дату, тип, категорию, сумму и заметку, все графики пересчитаются. Кнопка ✕ удаляет операцию; удалённую по ошибке можно вернуть кнопкой «Отменить» во всплывающем уведомлении или сочетанием Cmd/Ctrl+Z — пока не сделано другое изменение. Сверху — фильтры по типу, категории и месяцу (можно выбрать «Все время», например, чтобы увидеть все операции категории целиком), а поиск по заметке или сумме сразу ищет по всей истории, независимо от выбранного месяца.',
+    text: 'Кнопка ✎ открывает редактирование прямо в строке — можно поменять дату, тип, категорию, сумму и заметку, все графики пересчитаются. Кнопка ✕ удаляет операцию; удалённую по ошибке можно вернуть кнопкой «Отменить» во всплывающем уведомлении, сочетанием Cmd/Ctrl+Z или позже из Корзины внизу вкладки. Сверху — фильтры по типу, категории и месяцу (можно выбрать «Все время», например, чтобы увидеть все операции категории целиком), а поиск по заметке или сумме сразу ищет по всей истории, независимо от выбранного месяца.',
+  },
+  {
+    tab: 'transactions',
+    selector: '#trashCard',
+    title: 'Корзина',
+    text: 'Здесь хранятся последние 10 удалённых операций — восстановить можно любую из них, в любой момент, а не только самую последнюю. Более старые операции в корзине не хранятся — их можно найти в автоматическом бэкапе (кнопка в Настройках).',
   },
   // ---------- Категории ----------
   {
@@ -1632,8 +1735,8 @@ const TOUR_STEPS = [
   {
     tab: 'limits',
     selector: '#tab-limits',
-    title: 'Лимиты категорий',
-    text: 'Можно задать необязательный лимит трат по категории — на месяц, на год или сразу оба. Прогресс появится на Дашборде (месячный лимит) и на вкладке «По годам» (годовой), а при приближении к лимиту или его превышении — уведомление в правом верхнем углу.',
+    title: 'Лимиты и общий бюджет',
+    text: 'Сверху — общий бюджет на месяц (сумма вообще всех расходов, не одной категории); ниже — можно задать лимит трат по конкретной категории, на месяц, на год или сразу оба. Прогресс появится на Дашборде (месячные лимиты) и на вкладке «По годам» (годовые), а при приближении к лимиту или его превышении — уведомление в правом верхнем углу.',
   },
   // ---------- Цели ----------
   {
@@ -1800,6 +1903,7 @@ document.addEventListener('keydown', (e) => {
   await initCurrencySetting();
   await loadTransactionsTable();
   await refreshDashboard();
+  await refreshTrashCard();
   await loadGoals();
   await initAppLockSetting();
   await initAppVersion();

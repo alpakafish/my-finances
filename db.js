@@ -112,6 +112,39 @@ db.exec(`
     dismissed_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (source_transaction_id, period)
   );
+
+  -- Отдельная от limit_notification_dismissals выше — та привязана к
+  -- category_id (NOT NULL + FK), а общий бюджет ни к какой категории не
+  -- относится, только месяц (см. routes/limits.js). limit_type не нужен —
+  -- общий бюджет пока только месячный, не годовой (осознанный выбор).
+  CREATE TABLE IF NOT EXISTS overall_budget_notification_dismissals (
+    notification_type TEXT NOT NULL CHECK (notification_type IN ('approaching', 'exceeded')),
+    period TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (notification_type, period)
+  );
+
+  -- Корзина последних удалённых операций (см. routes/transactions.js DELETE
+  -- /:id). Раньше отмена удаления жила только в памяти вкладки и работала
+  -- только для самого последнего удаления, сбрасываясь при любом другом
+  -- действии — теперь это снимок на бэкенде, переживает перезапуск и любые
+  -- другие действия, и таких снимков хранится последних 10 (обрезка — в
+  -- самом DELETE-роуте). category_name — снимок на момент удаления, а не
+  -- живой JOIN: категория могла быть потом переименована или вовсе удалена,
+  -- запись в корзине должна остаться читаемой в любом случае. Операции
+  -- старше 10-й по-прежнему можно найти только в бэкапах (см. backup.js).
+  CREATE TABLE IF NOT EXISTS deleted_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('expense', 'income')),
+    category_id INTEGER,
+    category_name TEXT NOT NULL,
+    amount REAL NOT NULL,
+    note TEXT DEFAULT '',
+    excluded_from_total INTEGER NOT NULL DEFAULT 0,
+    is_recurring INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 // Миграция: колонка rollup_id могла отсутствовать в базе, созданной до появления целей.
@@ -184,6 +217,13 @@ db.resetAllData = db.transaction(() => {
   db.exec('DELETE FROM categories');
   db.exec('DELETE FROM limit_notification_dismissals');
   db.exec('DELETE FROM recurring_dismissals');
+  db.exec('DELETE FROM overall_budget_notification_dismissals');
+  db.exec('DELETE FROM deleted_transactions');
+  // В отличие от currency/onboarding_seen (настройки приложения, resetAllData
+  // их не трогает) — общий бюджет это финансовое планирование, того же рода,
+  // что monthly_limit у категорий (который стирается вместе с DELETE FROM
+  // categories выше), поэтому и его тоже сбрасываем.
+  db.exec("DELETE FROM app_settings WHERE key = 'overall_monthly_budget'");
   insertDefaultCategories();
 });
 

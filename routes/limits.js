@@ -29,6 +29,84 @@ function classify(pct) {
   return null;
 }
 
+// ---------- Общий бюджет на месяц ----------
+// В отличие от лимитов ниже — не привязан к категории, поэтому и не в
+// categories.monthly_limit, а в app_settings (та же таблица, что currency/
+// onboarding_seen). Пока только месяц (осознанный выбор при обсуждении
+// фичи) — год можно добавить позже тем же способом, если понадобится.
+// Считается ровно как «Расход» в шапке Дашборда (routes/summary.js
+// totalStmt) — без rollup (сумма по всем категориям расходов сразу не
+// зависит от того, что в какую свёрнуто) и без операций «нал.».
+function getOverallMonthlyBudget() {
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = 'overall_monthly_budget'").get();
+  return row ? Number(row.value) : null;
+}
+
+function setOverallMonthlyBudget(value) {
+  if (value === null) {
+    db.prepare("DELETE FROM app_settings WHERE key = 'overall_monthly_budget'").run();
+  } else {
+    db.prepare(`
+      INSERT INTO app_settings (key, value) VALUES ('overall_monthly_budget', ?)
+      ON CONFLICT(key) DO UPDATE SET value = ?
+    `).run(String(value), String(value));
+  }
+}
+
+function overallMonthlySpent(month) {
+  return db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS s FROM transactions
+    WHERE type = 'expense' AND excluded_from_total = 0 AND substr(date, 1, 7) = ?
+  `).get(month).s;
+}
+
+router.get('/overall', (req, res) => {
+  res.json({ monthly_limit: getOverallMonthlyBudget() });
+});
+
+router.put('/overall', (req, res) => {
+  const toNullableNumber = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+  const monthlyLimit = toNullableNumber(req.body.monthly_limit);
+  if (monthlyLimit !== null && !(monthlyLimit > 0)) {
+    return res.status(400).json({ error: 'Бюджет должен быть положительным числом или пустым (не задан)' });
+  }
+  const previous = getOverallMonthlyBudget();
+  db.transaction(() => {
+    // Как и у лимитов категорий ниже — смена значения обесценивает ранее
+    // закрытые по нему уведомления (за любой период, не только текущий,
+    // см. PUT /:id ниже — та же логика).
+    if (monthlyLimit !== previous) {
+      db.exec('DELETE FROM overall_budget_notification_dismissals');
+    }
+    setOverallMonthlyBudget(monthlyLimit);
+  })();
+  res.json({ monthly_limit: getOverallMonthlyBudget() });
+});
+
+router.get('/overall/progress', (req, res) => {
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : currentMonthKey();
+  const limit = getOverallMonthlyBudget();
+  const spent = overallMonthlySpent(month);
+  if (limit === null) return res.json({ limit: null, spent, pct: 0, exceeded: false });
+  const pct = limit > 0 ? Math.round((spent / limit) * 1000) / 10 : 0;
+  res.json({ limit, spent, pct, exceeded: spent > limit });
+});
+
+router.post('/overall/notifications/dismiss', (req, res) => {
+  const { notification_type, period } = req.body;
+  if (!['approaching', 'exceeded'].includes(notification_type) || !period) {
+    return res.status(400).json({ error: 'Некорректные параметры уведомления' });
+  }
+  db.prepare(`
+    INSERT INTO overall_budget_notification_dismissals (notification_type, period) VALUES (?, ?)
+    ON CONFLICT (notification_type, period) DO NOTHING
+  `).run(notification_type, period);
+  res.status(204).end();
+});
+
+// PUT /:id ниже трактовал бы "overall" как id категории (Number('overall') =
+// NaN → 404) — поэтому все /overall-роуты определены ВЫШЕ него, Express
+// матчит по порядку регистрации.
 router.put('/:id', (req, res) => {
   const id = Number(req.params.id);
   const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
@@ -123,6 +201,27 @@ router.get('/notifications', (req, res) => {
 
   addFrom(db.prepare(`SELECT * FROM categories WHERE type = 'expense' AND monthly_limit IS NOT NULL`).all(), 'month', month, 'monthly_limit');
   addFrom(db.prepare(`SELECT * FROM categories WHERE type = 'expense' AND yearly_limit IS NOT NULL`).all(), 'year', year, 'yearly_limit');
+
+  // Общий бюджет — своя, отдельная от categories, проверка (не привязан ни к
+  // одной категории, см. overall_budget_notification_dismissals в db.js).
+  const overallLimit = getOverallMonthlyBudget();
+  if (overallLimit !== null) {
+    const overallSpent = overallMonthlySpent(month);
+    const pct = overallLimit > 0 ? Math.round((overallSpent / overallLimit) * 1000) / 10 : 0;
+    const kind = classify(pct);
+    if (kind) {
+      const overallDismissed = db.prepare(
+        'SELECT 1 FROM overall_budget_notification_dismissals WHERE notification_type = ? AND period = ?'
+      ).get(kind, month);
+      if (!overallDismissed) {
+        notifications.push({
+          overall: true, category_id: null, category_name: null,
+          limit_type: 'month', notification_type: kind, pct, period: month,
+          limit: overallLimit, spent: overallSpent,
+        });
+      }
+    }
+  }
 
   res.json(notifications);
 });
