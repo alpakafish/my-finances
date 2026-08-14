@@ -20,6 +20,12 @@ temp directory per run (see `CLAUDE.md` "Testing" for why that matters).
 rather than by an automated test. UI-only fixes (e.g. disabling a button
 during an in-flight request) rely on that manual check, not a checked-in
 test. Worth adding a frontend harness if UI-only regressions start recurring.
+The transactions-list search (by note/amount, see below) is the biggest
+example so far — it's pure client-side filtering in `public/app.js`, so only
+its backend half (`category_id` query param) has an automated test; the
+search itself was verified manually (typed into a running preview, checked
+results/title/disabled month select) and would silently regress if someone
+changed the filter logic without also checking by hand.
 
 **Also known:** `desktop/test/launch.test.js` runs Electron against the
 *source* `desktop/` directory (`app.isPackaged` is `false`), not a packaged
@@ -56,5 +62,8 @@ backup/restore scenario), `delete-all-data`, onboarding-seen persistence
 across a port change (the desktop restart scenario), category spending
 limits (progress/notifications/dismissal/rollup-exclusion), currency
 setting, recurring transactions (suggestion/confirm/skip, the
-one-active-template-per-category+type invariant), and automatic backups
-(creation on startup, retention pruning, failure/dismiss notification).
+one-active-template-per-category+type invariant), automatic backups
+(creation on startup, retention pruning, failure/dismiss notification), and
+the transactions-list `category_id` filter (combines with `type` via AND;
+the note/amount search and the "search drops the month filter" behavior are
+frontend-only, see the "known gap" above).

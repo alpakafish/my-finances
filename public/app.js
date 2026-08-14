@@ -84,6 +84,8 @@ let currentMonth = monthKey(new Date());
 let pieChart = null;
 let txType = 'expense';
 let txFilterType = 'all';
+let txFilterCategory = ''; // '' = все категории, иначе id
+let txSearchQuery = '';
 const overviewCharts = { expense: null, income: null };
 const INSIGHT_RATIO = 1.5;
 
@@ -249,6 +251,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
 async function loadCategories() {
   categories = await api('/api/categories');
   renderTxCategoryOptions();
+  renderTxFilterCategoryOptions();
   renderCategoryManageLists();
   renderGoalCategoryOptions();
 }
@@ -257,6 +260,36 @@ function renderTxCategoryOptions() {
   const select = document.getElementById('txCategory');
   const filtered = categories.filter((c) => c.type === txType);
   select.innerHTML = filtered.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+}
+
+// Фильтр по категории на вкладке «Операции» — список сужается под выбранный
+// там тип (кнопки «Все/Расходы/Доходы»), тот же принцип, что и у категории в
+// форме новой операции выше, только с доп. вариантом «Все категории» и
+// группировкой (optgroup), когда тип — «Все» (иначе пришлось бы показывать
+// расходы и доходы вперемешку одним плоским списком).
+function renderTxFilterCategoryOptions() {
+  const select = document.getElementById('txFilterCategory');
+  const previousValue = select.value;
+  const optionHtml = (c) => `<option value="${c.id}">${c.name}</option>`;
+
+  let html = '<option value="">Все категории</option>';
+  if (txFilterType === 'all') {
+    const expense = categories.filter((c) => c.type === 'expense');
+    const income = categories.filter((c) => c.type === 'income');
+    html += `<optgroup label="Расходы">${expense.map(optionHtml).join('')}</optgroup>`;
+    html += `<optgroup label="Доходы">${income.map(optionHtml).join('')}</optgroup>`;
+  } else {
+    html += categories.filter((c) => c.type === txFilterType).map(optionHtml).join('');
+  }
+  select.innerHTML = html;
+
+  // Сохраняем текущий выбор, только если он ещё существует в новом наборе —
+  // сменили тип и выбранная категория стала несовместимой ("Еда" при "Доходы")
+  // → тихо сбрасываем на "Все категории" вместо невидимого несоответствия,
+  // которое молча вернуло бы пустой список без объяснений.
+  const stillValid = [...select.options].some((o) => o.value === previousValue);
+  select.value = stillValid ? previousValue : '';
+  txFilterCategory = select.value;
 }
 
 function renderCategoryManageLists() {
@@ -388,12 +421,38 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
   } catch (e) { toast(e.message, true); }
 });
 
-// ---------- Transactions filter (type) ----------
+// ---------- Transactions filter (type/category/search) ----------
 document.getElementById('txFilterType').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-type]');
   if (!btn) return;
   txFilterType = btn.dataset.type;
   document.querySelectorAll('#txFilterType button').forEach((b) => b.classList.toggle('active', b === btn));
+  renderTxFilterCategoryOptions(); // список категорий сужается под новый тип, несовместимый выбор сбрасывается
+  loadTransactionsTable();
+});
+
+document.getElementById('txFilterCategory').addEventListener('change', (e) => {
+  txFilterCategory = e.target.value;
+  loadTransactionsTable();
+});
+
+// Поиск — по заметке и сумме (см. loadTransactionsTable: фильтруется на
+// фронтенде через .toLowerCase(), не SQL LIKE — тот регистронезависим только
+// для ASCII, кириллицу без ICU-расширения не считает совпадением). Небольшой
+// debounce, чтобы не дёргать запрос на каждую букву при быстром вводе.
+let txSearchDebounceTimer = null;
+document.getElementById('txSearchInput').addEventListener('input', (e) => {
+  txSearchQuery = e.target.value;
+  document.getElementById('txSearchClear').hidden = txSearchQuery.length === 0;
+  clearTimeout(txSearchDebounceTimer);
+  txSearchDebounceTimer = setTimeout(loadTransactionsTable, 250);
+});
+
+document.getElementById('txSearchClear').addEventListener('click', () => {
+  const input = document.getElementById('txSearchInput');
+  input.value = '';
+  txSearchQuery = '';
+  document.getElementById('txSearchClear').hidden = true;
   loadTransactionsTable();
 });
 
@@ -446,20 +505,62 @@ async function loadRecurringSuggestions(month) {
 let currentTxRows = [];
 
 async function loadTransactionsTable() {
-  const month = document.getElementById('txMonthSelect').value;
-  const typeParam = txFilterType === 'all' ? '' : `&type=${txFilterType}`;
+  const monthSelect = document.getElementById('txMonthSelect');
+  const selectedMonth = monthSelect.value; // '' = «Все время», как '' у фильтра категории = «Все категории»
+  const query = txSearchQuery.trim();
+  // Поиск — по всей истории, а не только за выбранный месяц (в этом весь
+  // смысл: искать операцию, которую не помнишь, в каком месяце вносил), но
+  // тип и категория продолжают действовать. «Все время» в селекторе месяца —
+  // то же самое отсутствие ограничения по месяцу, только выбранное явно, а
+  // не через поиск (нужно, например, чтобы посмотреть вообще все операции
+  // категории, а не только за один месяц).
+  const isSearching = query.length > 0;
+  const showAllTime = isSearching || selectedMonth === '';
+  const params = new URLSearchParams();
+  if (!showAllTime) params.set('month', selectedMonth);
+  if (txFilterType !== 'all') params.set('type', txFilterType);
+  if (txFilterCategory) params.set('category_id', txFilterCategory);
+
+  // Поиск блокирует сам селектор месяца (он в это время ничего не решает,
+  // не хотим, чтобы выглядело забытым) — «Все время» же остаётся обычным
+  // выбираемым значением, доступным и без поиска.
+  monthSelect.disabled = isSearching;
+
+  let title = 'Операции за месяц';
+  if (isSearching) title = `Результаты поиска: «${query}»`;
+  else if (selectedMonth === '') title = 'Операции за всё время';
+  document.getElementById('txListTitle').textContent = title;
+
+  // Подсказки про повторяющиеся операции — про конкретный месяц, без него
+  // (поиск или «Все время») не имеют смысла, просто прячем.
+  const suggestionsPromise = showAllTime
+    ? Promise.resolve(document.getElementById('recurringSuggestions').innerHTML = '')
+    : loadRecurringSuggestions(selectedMonth);
+
   // Подсказки грузятся параллельно и до early-return ниже (rows.length === 0) —
   // это как раз самый частый случай, когда они нужны: только что открытый
   // месяц, где ещё вообще ничего не внесено.
-  const [rows] = await Promise.all([
-    api(`/api/transactions?month=${month}${typeParam}`),
-    loadRecurringSuggestions(month),
+  const [allRows] = await Promise.all([
+    api(`/api/transactions?${params.toString()}`),
+    suggestionsPromise,
   ]);
+
+  // Регистронезависимо и корректно для кириллицы (SQL LIKE — только для ASCII
+  // без ICU-расширения, которого в node:sqlite нет) — поэтому фильтруем в JS,
+  // а не через SQL-параметр. По заметке и по сумме (как строке — "1500"
+  // находит и 1500, и 11500, не только точное совпадение).
+  const rows = isSearching
+    ? allRows.filter((r) => (r.note || '').toLowerCase().includes(query.toLowerCase()) || String(r.amount).includes(query))
+    : allRows;
+
   currentTxRows = rows;
   const tbody = document.getElementById('txTableBody');
   const emptyHint = document.getElementById('txEmptyHint');
   if (!rows.length) {
     tbody.innerHTML = '';
+    if (isSearching) emptyHint.textContent = 'Совпадений не найдено';
+    else if (selectedMonth === '') emptyHint.textContent = 'Операций пока нет';
+    else emptyHint.textContent = 'Пока нет операций за этот месяц';
     emptyHint.style.display = 'block';
     return;
   }
@@ -575,7 +676,10 @@ function populateMonthSelectors() {
   const months = lastNMonths(24);
   const options = months.map((m) => `<option value="${m}">${monthLabel(m)}</option>`).join('');
   document.getElementById('monthSelect').innerHTML = options;
-  document.getElementById('txMonthSelect').innerHTML = options;
+  // «Все время» — только на вкладке «Операции» (значение "", как «Все категории»
+  // у фильтра по категории), не на Дашборде: отчёт за месяц там неотделим от
+  // конкретного месяца, «за всё время» ему просто некуда было бы деться.
+  document.getElementById('txMonthSelect').innerHTML = `<option value="">Все время</option>${options}`;
   document.getElementById('monthSelect').value = currentMonth;
   document.getElementById('txMonthSelect').value = currentMonth;
 }
@@ -1515,7 +1619,7 @@ const TOUR_STEPS = [
     tab: 'transactions',
     selector: '#txListCard',
     title: 'Операции — список, изменение и удаление',
-    text: 'Кнопка ✎ открывает редактирование прямо в строке — можно поменять дату, тип, категорию, сумму и заметку, все графики пересчитаются. Кнопка ✕ удаляет операцию; удалённую по ошибке можно вернуть кнопкой «Отменить» во всплывающем уведомлении или сочетанием Cmd/Ctrl+Z — пока не сделано другое изменение. Список фильтруется по типу и месяцу сверху.',
+    text: 'Кнопка ✎ открывает редактирование прямо в строке — можно поменять дату, тип, категорию, сумму и заметку, все графики пересчитаются. Кнопка ✕ удаляет операцию; удалённую по ошибке можно вернуть кнопкой «Отменить» во всплывающем уведомлении или сочетанием Cmd/Ctrl+Z — пока не сделано другое изменение. Сверху — фильтры по типу, категории и месяцу (можно выбрать «Все время», например, чтобы увидеть все операции категории целиком), а поиск по заметке или сумме сразу ищет по всей истории, независимо от выбранного месяца.',
   },
   // ---------- Категории ----------
   {

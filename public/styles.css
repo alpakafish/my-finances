@@ -131,6 +131,12 @@ h1 { font-size: 22px; font-weight: 600; }
 }
 .month-nav select { padding: 5px 34px 5px 8px; background-position: right 16px center; }
 #yearSingleSelect, #currencySelect { padding: 6px 30px 6px 10px; background-position: right 10px center; }
+.month-nav select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.search-field-wrap { position: relative; }
+#txSearchInput { border: 1px solid var(--color-border-input); border-radius: 6px; padding: 5px 26px 5px 8px; font-family: inherit; font-size: 13px; width: 190px; background: var(--color-surface); color: var(--color-text); }
+#txSearchClear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--color-text-tertiary); font-size: 12px; padding: 2px; line-height: 1; }
+#txSearchClear:hover { color: var(--color-text); }
 
 .year-label { font-size: 13px; font-weight: 500; min-width: 42px; text-align: center; }
 

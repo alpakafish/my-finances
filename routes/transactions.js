@@ -4,11 +4,15 @@ const db = require('../db');
 const router = express.Router();
 
 router.get('/', (req, res) => {
-  const { month, type } = req.query; // month: YYYY-MM, type: expense|income
+  const { month, type, category_id } = req.query; // month: YYYY-MM, type: expense|income
   const conditions = [];
   const params = [];
   if (month) { conditions.push('substr(t.date, 1, 7) = ?'); params.push(month); }
   if (type === 'expense' || type === 'income') { conditions.push('t.type = ?'); params.push(type); }
+  // Фильтр по категории (вкладка «Операции», поиск) — независим от month:
+  // текстовый поиск на фронтенде запрашивает без month (по всей истории),
+  // но продолжает уважать category_id, см. public/app.js loadTransactionsTable().
+  if (category_id) { conditions.push('t.category_id = ?'); params.push(Number(category_id)); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const rows = db.prepare(`
     SELECT t.*, c.name AS category_name, c.color AS category_color

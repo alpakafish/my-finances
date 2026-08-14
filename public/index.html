@@ -181,13 +181,18 @@
 
     <div class="card" id="txListCard">
       <div class="section-label tx-list-header">
-        <span>Операции за месяц</span>
+        <span id="txListTitle">Операции за месяц</span>
         <div class="month-nav">
+          <div class="search-field-wrap">
+            <input type="text" id="txSearchInput" placeholder="Поиск по заметке или сумме">
+            <button type="button" id="txSearchClear" aria-label="Очистить поиск" hidden>✕</button>
+          </div>
           <div class="type-toggle" id="txFilterType">
             <button type="button" data-type="all" class="active">Все</button>
             <button type="button" data-type="expense">Расходы</button>
             <button type="button" data-type="income">Доходы</button>
           </div>
+          <select id="txFilterCategory"></select>
           <select id="txMonthSelect"></select>
         </div>
       </div>

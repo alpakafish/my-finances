@@ -663,3 +663,28 @@ test('automatic backups: a failed attempt surfaces as a dismissible error, scope
     removeDataDir(dir);
   }
 });
+
+test('transactions list: category_id filter, and combines with type — month is intentionally not exercised here (that half is frontend-only, see TESTING.md)', async () => {
+  const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const food = categories.find((c) => c.name === 'Еда');
+  const salary = categories.find((c) => c.name === 'Зарплата');
+
+  // Уникальная дата/сумма — чтобы не пересечься с данными других тестов этого файла.
+  await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2031-09-01', type: 'expense', category_id: food.id, amount: 111, note: 'category filter test' }),
+  });
+  await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2031-09-01', type: 'income', category_id: salary.id, amount: 222, note: 'category filter test' }),
+  });
+
+  const byCategory = await (await fetch(`${baseUrl}/api/transactions?category_id=${food.id}`)).json();
+  assert.ok(byCategory.every((t) => t.category_id === food.id), 'category_id must narrow to only that category, across all months');
+  assert.ok(byCategory.some((t) => t.note === 'category filter test'));
+
+  // category_id + type вместе — категория расходов, но с типом "доход" не даёт ничего
+  // (Еда — категория расходов), подтверждает, что фильтры действительно комбинируются через "И".
+  const mismatched = await (await fetch(`${baseUrl}/api/transactions?category_id=${food.id}&type=income`)).json();
+  assert.equal(mismatched.length, 0);
+});
