@@ -122,7 +122,7 @@ h1 { font-size: 22px; font-weight: 600; }
 .month-nav { display: flex; align-items: center; gap: 10px; }
 .month-nav > button { border: 1px solid var(--color-border-input); background: var(--color-surface); color: var(--color-text); border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 14px; }
 
-.month-nav select, #yearSingleSelect {
+.month-nav select, #yearSingleSelect, #currencySelect {
   border: 1px solid var(--color-border-input); border-radius: 6px; font-family: inherit; font-size: 13px;
   background-color: var(--color-surface); color: var(--color-text);
   appearance: none; -webkit-appearance: none; -moz-appearance: none;
@@ -130,7 +130,7 @@ h1 { font-size: 22px; font-weight: 600; }
   background-repeat: no-repeat;
 }
 .month-nav select { padding: 5px 34px 5px 8px; background-position: right 16px center; }
-#yearSingleSelect { padding: 6px 30px 6px 10px; background-position: right 10px center; }
+#yearSingleSelect, #currencySelect { padding: 6px 30px 6px 10px; background-position: right 10px center; }
 
 .year-label { font-size: 13px; font-weight: 500; min-width: 42px; text-align: center; }
 

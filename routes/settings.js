@@ -36,4 +36,27 @@ router.put('/onboarding-seen', (req, res) => {
   res.status(204).end();
 });
 
+// Валюта — только формат отображения сумм (символ, порядок), см. public/app.js
+// fmt()/CURRENCIES. Никакой конвертации: старые операции не пересчитываются,
+// это просто «в какой валюте вы вводите суммы». В app_settings, а не
+// localStorage — по той же причине, что onboarding_seen выше. Переживает
+// «Удалить все данные» (routes/settings.js DELETE /all-data не трогает
+// app_settings) — это настройка приложения, а не финансовые данные.
+router.get('/currency', (req, res) => {
+  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('currency');
+  res.json({ currency: row ? row.value : 'RUB' });
+});
+
+router.put('/currency', (req, res) => {
+  const { currency } = req.body;
+  if (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) {
+    return res.status(400).json({ error: 'Некорректный код валюты' });
+  }
+  db.prepare(`
+    INSERT INTO app_settings (key, value) VALUES ('currency', ?)
+    ON CONFLICT(key) DO UPDATE SET value = ?
+  `).run(currency, currency);
+  res.status(204).end();
+});
+
 module.exports = router;

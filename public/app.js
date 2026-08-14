@@ -94,8 +94,31 @@ function monthLabel(key) {
   const [y, m] = key.split('-').map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
 }
+// Символ и порядок для настройки «Валюта отображения» (Настройки, #currencySelect) —
+// чисто формат, без конвертации: fmt() просто меняет, как подписано число, а не
+// пересчитывает его. 'before' — символ вплотную к числу без пробела (как $1 234),
+// 'after' — число, пробел, символ (как 1 234 ₽).
+const CURRENCIES = {
+  RUB: { symbol: '₽', position: 'after' },
+  USD: { symbol: '$', position: 'before' },
+  EUR: { symbol: '€', position: 'before' },
+  GBP: { symbol: '£', position: 'before' },
+  CNY: { symbol: '¥', position: 'before' },
+  BRL: { symbol: 'R$', position: 'before' },
+  TRY: { symbol: '₺', position: 'after' },
+  GEL: { symbol: '₾', position: 'after' },
+  AMD: { symbol: '֏', position: 'after' },
+  KZT: { symbol: '₸', position: 'after' },
+  AED: { symbol: 'د.إ', position: 'after' },
+  JPY: { symbol: '¥', position: 'before' },
+};
+let currentCurrency = 'RUB';
+
 function fmt(n) {
-  return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+  const { symbol, position } = CURRENCIES[currentCurrency] || CURRENCIES.RUB;
+  const abs = Math.round(Math.abs(n)).toLocaleString('ru-RU');
+  const sign = n < 0 ? '-' : '';
+  return position === 'before' ? `${sign}${symbol}${abs}` : `${sign}${abs} ${symbol}`;
 }
 function lastNMonths(n) {
   const now = new Date();
@@ -1208,6 +1231,34 @@ async function initAppLockSetting() {
   });
 }
 
+// Валюта отображения — только формат (см. fmt()/CURRENCIES), должна быть загружена
+// ДО первого рендера сумм (loadTransactionsTable/refreshDashboard/loadGoals в init()
+// ниже), иначе первая отрисовка мелькнёт с ₽ по умолчанию и тут же перерисуется.
+async function initCurrencySetting() {
+  const select = document.getElementById('currencySelect');
+  try {
+    currentCurrency = (await api('/api/settings/currency')).currency;
+  } catch (e) { /* остаёмся на RUB по умолчанию */ }
+  select.value = currentCurrency;
+
+  select.addEventListener('change', async () => {
+    const next = select.value;
+    try {
+      await api('/api/settings/currency', { method: 'PUT', body: JSON.stringify({ currency: next }) });
+      currentCurrency = next;
+      await loadTransactionsTable();
+      await refreshDashboard();
+      await loadGoals();
+      if (document.querySelector('.tab-btn[data-tab="years"]').classList.contains('active')) await loadYearsTab();
+      if (document.querySelector('.tab-btn[data-tab="limits"]').classList.contains('active')) await loadLimitsTab();
+      toast('Валюта изменена');
+    } catch (e) {
+      select.value = currentCurrency;
+      toast(e.message, true);
+    }
+  });
+}
+
 // Версия приложения — в desktop-версии через Electron (app.getVersion(), точная версия
 // собранного бандла), в веб-версии — с бэкенда (version из корневого package.json).
 async function initAppVersion() {
@@ -1364,7 +1415,7 @@ const TOUR_STEPS = [
     tab: 'settings',
     selector: '#tab-settings',
     title: 'Настройки',
-    text: 'Здесь — защита приложения паролем/Touch ID, ручная проверка обновлений (обе — в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
+    text: 'Здесь — валюта отображения (меняет только символ, без пересчёта старых операций), защита приложения паролем/Touch ID, ручная проверка обновлений (последние две — в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
   },
   {
     selector: '#helpBtn',
@@ -1501,6 +1552,7 @@ document.addEventListener('keydown', (e) => {
   document.getElementById('txDate').valueAsDate = new Date();
   populateMonthSelectors();
   await loadCategories();
+  await initCurrencySetting();
   await loadTransactionsTable();
   await refreshDashboard();
   await loadGoals();
