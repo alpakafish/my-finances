@@ -115,7 +115,42 @@ one.
 никогда на `data/smeta.db` пользователя (см. «Testing» ниже) — а ручной
 проверки "вроде импортировалось" недостаточно, нужен закреплённый тест в
 `test/server.test.js`, как для любого другого фикса или фичи.
-самим суммам.
+
+## Чек-лист для нового роута (найдено при ревью 2026-08-14)
+
+Полный обзор проекта в этот день нашёл шесть багов разом (хранимый XSS,
+краш всего бэкенда на непойманном исключении в async-роуте, 500 вместо
+понятной ошибки на удалении rollup-категории, и три помельче — см.
+`TESTING.md`, регрессии от 2026-08-14). Почти все — один и тот же
+повторяющийся паттерн. Перед тем как добавить/поменять роут:
+
+- **Любой `async (req, res) => {...}` роут-хендлер должен целиком быть в
+  try/catch.** Express 4 не ловит отклонённый promise async-хендлера сам
+  (только синхронный throw) — необработанный reject там становится
+  unhandled rejection, а с Node 15+ это по умолчанию роняет **весь процесс**,
+  а не только этот запрос (см. `routes/export.js`, было исправлено). Пример
+  для копирования — `routes/import.js`, там уже сделано правильно. Голый
+  `process.on('unhandledRejection', ...)` в `server.js` — только страховка
+  на случай, если кто-то забудет, не замена самому try/catch.
+- **Любой DELETE, который трогает строку, на которую может ссылаться что-то
+  ещё через FK (`foreign_keys=ON` в db.js) — либо явно проверить это
+  заранее, либо быть готовым, что SQLite бросит `SQLITE_CONSTRAINT`.** См.
+  `routes/categories.js` — уже есть `goalUsing`-проверка (категория привязана
+  к цели), но `rollup_id` (категория — цель rollup для другой) не была
+  проверена вообще и падала голым 500, пока не нашли и не поправили тем же
+  приёмом.
+- **Пользовательский текст, который рано или поздно попадёт в `innerHTML`
+  на фронтенде (`public/app.js`) — это потенциальный XSS**, даже если
+  кажется, что "ну кто будет вписывать `<script>` в заметку операции" —
+  через импорт Excel-файла это же поле может прийти не от самого
+  пользователя. Использовать `escapeHtml()` (объявлена в начале
+  `public/app.js`) на любом таком значении — и как текстовое содержимое, и
+  особенно внутри HTML-атрибутов (`value="..."`, `style="..."`), где `"`
+  в значении иначе разрывает сам атрибут.
+- Проверять новые API-поля на формат, а не только на truthy/falsy — `date`
+  у операций долго принимался как «любая непустая строка», это и открыло
+  путь для XSS выше: значение, которое никогда не должно было быть
+  свободным текстом, дошло до рендера как если бы было им.
 
 ## Desktop-specific gotchas learned the hard way
 
@@ -193,6 +228,38 @@ one.
   top-level `.js` file that `server.js` (or anything else already in
   `extraResources`) requires, add a matching `extraResources` entry in the
   same change** — don't wait to discover it via a crash-looped test build.
+
+**A backend crash-and-self-restart (the existing retry logic in
+`desktop/src/backend.js`) left an already-open window pointing at a dead
+port forever — found via full-project review, 2026-08-14, not a user
+report.** `PORT=0` gives every `utilityProcess.fork()` a fresh random port
+(intentional, avoids conflicts — see server.js), but nothing anywhere called
+`mainWindow.loadURL()` again after the very first launch. So: backend
+crashes mid-session, the restart logic quietly brings up a new instance on a
+new port, but the window is still wired to the old one — every fetch in
+`public/app.js` fails, the app looks frozen, and even the menu's manual
+"Reload" doesn't help (it just re-fetches the same dead URL, `webContents`
+has no memory of "reload, but at a different origin"). Separately: if the
+crash happened on the very first launch attempt (before the backend had
+*ever* reached `'server-ready'`) and kept failing past `MAX_RESTARTS`, the
+original `backend.start()` promise that `launch()` awaits neither resolved
+nor rejected, ever — each retry called `this.start()` fresh, creating a
+brand new orphaned Promise instead of settling the one `launch()` was
+awaiting. `launch()`'s `catch` block (which calls `app.quit()`) never ran;
+the only feedback was the separate `onCrash` error dialog, after which the
+process just sat there with no window and no way to quit except a manual
+force-quit. Fixed by having `Backend._spawn()` reuse the *same*
+`resolve`/`reject` across every retry (a stale-already-resolved promise's
+extra `resolve()` call on a later successful restart is a harmless JS
+no-op, so this doesn't need special-casing) and adding `backend.onRestart
+(newPort)`, wired in `main.js` to call `mainWindow.loadURL()` on the new
+port. Gotcha inside the gotcha: the window's `will-navigate` external-link
+guard checked against the port captured in `createWindow(port)`'s closure —
+the reconnect's own `loadURL()` call to the *new* port tripped that guard
+(it treats programmatic `loadURL` the same as a clicked link) and would
+have bounced straight out to the system browser instead of reloading. Fixed
+by checking the live `backend.port` in that guard instead of the
+closed-over value.
 
 **`window.prompt()` does not render anything in an Electron `BrowserWindow` —
 found via a real user report on v1.0.11, 2026-08-12.** Unlike

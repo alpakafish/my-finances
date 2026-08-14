@@ -166,6 +166,8 @@ router.put('/:id', (req, res) => {
 });
 
 router.delete('/:id', (req, res) => {
+  const existing = db.prepare('SELECT id FROM goals WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Цель не найдена' });
   db.prepare('DELETE FROM goals WHERE id = ?').run(req.params.id);
   res.status(204).end();
 });

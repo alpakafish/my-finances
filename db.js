@@ -20,6 +20,15 @@ db.pragma = (str) => db.exec(`PRAGMA ${str}`);
 // SAVEPOINT-совместимая реализация — better-sqlite3 умеет вкладывать .transaction() друг
 // в друга (routes/import.js так и делает: findOrCreateCategory внутри runImport), обычный
 // голый BEGIN/COMMIT этого не позволяет ("cannot start a transaction within a transaction").
+//
+// ВАЖНО: txDepth — счётчик на уровне модуля, общий на все вызовы сразу. Это
+// безопасно только потому, что ни один fn, переданный в db.transaction()
+// нигде в проекте, не содержит await — вся функция от BEGIN/SAVEPOINT до
+// COMMIT/RELEASE выполняется одним синхронным куском, event loop не может
+// вклиниться с чужим db.transaction() посередине. Если когда-нибудь
+// понадобится async fn внутри транзакции — эта схема сломается (два
+// одновременных вызова будут делить один и тот же txDepth и путать глубину
+// вложенности SAVEPOINT). Не передавай сюда async-функцию.
 let txDepth = 0;
 db.transaction = (fn) => (...args) => {
   const savepoint = `sp_${txDepth}`;

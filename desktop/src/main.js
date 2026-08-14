@@ -101,8 +101,14 @@ function createWindow(port) {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+  // Сверяем с backend.port (актуальным на момент события), а не с `port`
+  // выше (тем, что был при СОЗДАНИИ окна) — иначе собственный вызов
+  // mainWindow.loadURL() на новый порт из backend.onRestart ниже сам же
+  // словил бы себя как «внешнюю» навигацию (will-navigate реагирует и на
+  // programmatic loadURL, не только на клики) и улетал бы в системный
+  // браузер вместо перезагрузки окна.
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(`http://127.0.0.1:${port}`)) {
+    if (!url.startsWith(`http://127.0.0.1:${backend.port}`)) {
       event.preventDefault();
       shell.openExternal(url);
     }
@@ -247,6 +253,18 @@ async function launch() {
       'Бэкенд остановлен',
       `Внутренний сервис приложения аварийно завершился и не смог перезапуститься.\n\n${err.message}\n\nПерезапустите приложение. Если проблема повторится, посмотрите логи:\n${log.transports.file.getFile().path}`
     );
+  };
+
+  // Бэкенд упал и сам восстановился на новом порту (PORT=0 — новый случайный
+  // порт на каждый форк, см. backend.js) уже после того, как окно было
+  // открыто и указывало на старый (теперь мёртвый) порт — без этого окно
+  // просто продолжало бы стучаться в никуда, и даже пункт меню «Reload» не
+  // помог бы (перезагружает тот же старый URL). Перегружаем на новый порт
+  // молча — с точки зрения пользователя это должно выглядеть как «на секунду
+  // моргнуло и снова работает», а не как отдельное событие, требующее диалога.
+  backend.onRestart = (newPort) => {
+    log.info(`[backend] reconnecting window to new port ${newPort} after restart`);
+    mainWindow?.loadURL(`http://127.0.0.1:${newPort}/`);
   };
 
   try {

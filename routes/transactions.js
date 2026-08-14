@@ -3,6 +3,17 @@ const db = require('../db');
 
 const router = express.Router();
 
+// Раньше `date` только проверялась на truthy — любая непустая строка проходила
+// и сохранялась как есть (достижимо не через саму форму — там `<input
+// type="date">` браузер уже ограничивает форматом — а через прямой вызов API
+// или намеренно испорченный импортируемый файл). public/app.js экранирует
+// пользовательский текст перед вставкой в innerHTML, но лишняя незавалидированная
+// дыра в бэкенде — то же самое дублирование защиты, что уже принято для
+// остальных полей (см. category/goals валидацию).
+function isValidDate(d) {
+  return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d);
+}
+
 router.get('/', (req, res) => {
   const { month, type, category_id } = req.query; // month: YYYY-MM, type: expense|income
   const conditions = [];
@@ -25,7 +36,7 @@ router.get('/', (req, res) => {
 
 router.post('/', (req, res) => {
   const { date, type, category_id, amount, note, excluded_from_total, is_recurring } = req.body;
-  if (!date || !['expense', 'income'].includes(type) || !category_id || !(amount > 0)) {
+  if (!isValidDate(date) || !['expense', 'income'].includes(type) || !category_id || !(amount > 0)) {
     return res.status(400).json({ error: 'Заполните дату, тип, категорию и сумму (> 0)' });
   }
   // Не более одной активной повторяющейся операции на (категория, тип) —
@@ -82,6 +93,9 @@ router.put('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Операция не найдена' });
   const { date, type, category_id, amount, note, excluded_from_total, is_recurring } = req.body;
+  if (date !== undefined && date !== null && !isValidDate(date)) {
+    return res.status(400).json({ error: 'Некорректная дата' });
+  }
   const finalCategoryId = category_id || existing.category_id;
   const finalType = type || existing.type;
 

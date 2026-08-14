@@ -88,11 +88,23 @@ function buildWorkbook() {
 }
 
 router.get('/', async (req, res) => {
-  const workbook = buildWorkbook();
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="smeta-export-${new Date().toISOString().slice(0, 10)}.xlsx"`);
-  await workbook.xlsx.write(res);
-  res.end();
+  // try/catch обязателен здесь, а не факультативен: Express 4 не ловит сам
+  // отклонённый promise async-хендлера (в отличие от синхронного throw) — без
+  // этого любая ошибка внутри (например, обрыв записи в res, если пользователь
+  // отменил скачивание на середине) становится unhandled rejection, а с Node
+  // 15+ это по умолчанию роняет процесс целиком, а не только этот запрос
+  // (проверено отдельным репро — тот же паттерн валит процесс сразу).
+  try {
+    const workbook = buildWorkbook();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="smeta-export-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error(e);
+    if (!res.headersSent) res.status(500).json({ error: 'Ошибка при экспорте: ' + e.message });
+    else res.end();
+  }
 });
 
 module.exports = router;

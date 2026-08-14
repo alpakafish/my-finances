@@ -188,6 +188,14 @@ test('goal creation and contribution', async () => {
   });
   const updated = await contribRes.json();
   assert.equal(updated.progress, 500);
+
+  const delRes = await fetch(`${baseUrl}/api/goals/${goal.id}`, { method: 'DELETE' });
+  assert.equal(delRes.status, 204);
+  // Regression: DELETE didn't check existence first — a repeat/stale delete
+  // silently returned 204 for a goal that was never there, inconsistent with
+  // every other DELETE route in this codebase.
+  const repeatDelRes = await fetch(`${baseUrl}/api/goals/${goal.id}`, { method: 'DELETE' });
+  assert.equal(repeatDelRes.status, 404);
 });
 
 test('export from one instance re-imports cleanly on a fresh one (multi-device backup/restore)', async () => {
@@ -504,6 +512,79 @@ test('category validation: whitespace-only rename rejected, reassign-on-delete t
 
   const okTargetRes = await fetch(`${baseUrl}/api/categories/${toDelete.id}?reassignTo=${food.id}`, { method: 'DELETE' });
   assert.equal(okTargetRes.status, 204, 'a same-type, existing target must still work');
+});
+
+test('category deletion: a category that another category rolls up into (e.g. a goal\'s dedicated category → "Сбережения") is rejected with 409, not a raw 500', async () => {
+  // Regression: DELETE on a rollup TARGET threw an uncaught SQLITE_CONSTRAINT
+  // (categories.rollup_id → categories(id), foreign_keys=ON, no ON DELETE) —
+  // Express's default error middleware turned that into a bare "Внутренняя
+  // ошибка сервера" instead of an actionable message, found 2026-08-14 via a
+  // full-project review. Reproduced with a goal's own dedicated category
+  // (new_category.rollup_id), the same path a real user hits from the UI.
+  const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const savings = categories.find((c) => c.name === 'Сбережения');
+
+  const rollupTargetCat = await (await fetch(`${baseUrl}/api/categories`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Цель ролап-теста', type: 'expense', color: '#222222' }),
+  })).json();
+  await fetch(`${baseUrl}/api/categories/${rollupTargetCat.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Цель ролап-теста' }),
+  }); // no-op PUT, just confirms the row exists before we hand-set rollup_id below
+
+  // rollup_id isn't settable via PUT /api/categories/:id (only at creation, via
+  // goals' new_category) — go through the goal-creation path directly, the
+  // same one a real user exercises.
+  const goal = await (await fetch(`${baseUrl}/api/goals`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Ролап-цель', target_amount: 1000,
+      new_category: { name: 'Подкатегория ролап-теста', rollup_id: savings.id },
+    }),
+  })).json();
+  assert.ok(goal.category_id, 'goal should have created its own category');
+
+  const delRes = await fetch(`${baseUrl}/api/categories/${savings.id}`, { method: 'DELETE' });
+  assert.equal(delRes.status, 409, 'deleting a rollup target must be a clean 409, not a raw 500');
+  const body = await delRes.json();
+  assert.match(body.error, /Дашборде/, 'error message should explain why (rollup), not just fail generically');
+
+  const stillThere = await (await fetch(`${baseUrl}/api/categories`)).json();
+  assert.ok(stillThere.some((c) => c.id === savings.id), '"Сбережения" must survive the rejected delete');
+
+  // Cleanup so this category doesn't leak into other tests on the shared instance.
+  await fetch(`${baseUrl}/api/goals/${goal.id}`, { method: 'DELETE' });
+  await fetch(`${baseUrl}/api/categories/${goal.category_id}`, { method: 'DELETE' });
+  await fetch(`${baseUrl}/api/categories/${rollupTargetCat.id}`, { method: 'DELETE' });
+});
+
+test('transaction date validation: malformed/missing date rejected on create and edit (not just stored as-is)', async () => {
+  // Regression: `date` was only checked for truthy, not format — any string
+  // was accepted and later rendered unescaped client-side (see the XSS fix in
+  // public/app.js escapeHtml() — this is the matching backend-side gap that
+  // let a non-date string reach that render path in the first place).
+  const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const food = categories.find((c) => c.name === 'Еда');
+
+  const badCreateRes = await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '<img src=x onerror=alert(1)>', type: 'expense', category_id: food.id, amount: 10, note: '' }),
+  });
+  assert.equal(badCreateRes.status, 400);
+
+  const goodTx = await (await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2026-08-01', type: 'expense', category_id: food.id, amount: 10, note: '' }),
+  })).json();
+
+  const badEditRes = await fetch(`${baseUrl}/api/transactions/${goodTx.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date: 'not-a-date' }),
+  });
+  assert.equal(badEditRes.status, 400);
+  const stillGood = await (await fetch(`${baseUrl}/api/transactions?month=2026-08`)).json();
+  assert.ok(stillGood.some((t) => t.id === goodTx.id && t.date === '2026-08-01'), 'date must be unchanged after a rejected edit');
+
+  await fetch(`${baseUrl}/api/transactions/${goodTx.id}`, { method: 'DELETE' });
 });
 
 test('goal validation: duration_months must be a positive integer, target_amount must stay positive on edit', async () => {

@@ -65,6 +65,20 @@ router.delete('/:id', (req, res) => {
     return res.status(409).json({ error: `Эта категория привязана к цели «${goalUsing.name}» — удалите или измените цель во вкладке «Цели», прежде чем удалять категорию.` });
   }
 
+  // Категория-цель rollup (см. rollup_id в db.js — например «Сбережения», в
+  // которую подшита отдельная категория цели) не даёт себя удалить: FK
+  // categories.rollup_id → categories(id) без ON DELETE, foreign_keys=ON —
+  // без этой проверки DELETE падал бы необработанным SQLITE_CONSTRAINT и
+  // роут отвечал бы голым 500 вместо понятной причины (найдено и
+  // воспроизведено вручную: цель с новой категорией, rollup → «Сбережения»,
+  // затем попытка удалить «Сбережения»).
+  const rollupUsing = db.prepare('SELECT name FROM categories WHERE rollup_id = ?').all(id);
+  if (rollupUsing.length > 0) {
+    return res.status(409).json({
+      error: `На эту категорию ссылается как на «Дашборде →» другая категория (${rollupUsing.map((c) => `«${c.name}»`).join(', ')}) — сначала измените или удалите её (обычно это категория цели), прежде чем удалять эту.`,
+    });
+  }
+
   const usageCount = db.prepare('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?').get(id).n;
 
   if (usageCount > 0) {

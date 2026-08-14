@@ -1,5 +1,18 @@
 const CAT_COLORS_FALLBACK = '#888780';
 
+// Экранирование для любого пользовательского текста (заметка операции, название
+// категории/цели, цвет категории), который идёт в innerHTML — как текстовое
+// содержимое, так и внутрь HTML-атрибутов (value="...", style="...") ниже по
+// файлу. Без этого, например, заметка вида `<img src=x onerror=...>` реально
+// выполнялась бы как код при отрисовке списка операций (проверено вручную) —
+// категории/операции могут прийти и через импорт Excel-файла, не только через
+// форму в самом приложении, так что это не только «сам себе злобный Буратино».
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
 // ---------- Тема оформления (desktop-only, см. desktop/DARK_THEME.md) ----------
 // html[data-theme] уже проставлен inline-скриптом в <head> index.html (до первой
 // отрисовки, чтобы не мигнуть не той темой) — здесь просто читаем то, что там есть.
@@ -199,7 +212,8 @@ document.addEventListener('keydown', (e) => {
 function trashRowLabel(row) {
   const sign = row.type === 'expense' ? '−' : '+';
   const cash = row.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : '';
-  return `${row.date} · ${row.category_name} · ${sign}${fmt(row.amount)}${cash}${row.note ? ` · ${row.note}` : ''}`;
+  const note = row.note ? ` · ${escapeHtml(row.note)}` : '';
+  return `${escapeHtml(row.date)} · ${escapeHtml(row.category_name)} · ${sign}${fmt(row.amount)}${cash}${note}`;
 }
 
 async function refreshTrashCard() {
@@ -281,7 +295,7 @@ function showCategoryDeleteModal({ categoryName, type, excludeId, usageCount, on
   reassignField.style.display = canReassign ? '' : 'none';
   reassignBtn.style.display = canReassign ? '' : 'none';
   if (canReassign) {
-    reassignSelect.innerHTML = others.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+    reassignSelect.innerHTML = others.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
   }
 
   const close = () => {
@@ -319,7 +333,7 @@ async function loadCategories() {
 function renderTxCategoryOptions() {
   const select = document.getElementById('txCategory');
   const filtered = categories.filter((c) => c.type === txType);
-  select.innerHTML = filtered.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+  select.innerHTML = filtered.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
 }
 
 // Фильтр по категории на вкладке «Операции» — список сужается под выбранный
@@ -330,7 +344,7 @@ function renderTxCategoryOptions() {
 function renderTxFilterCategoryOptions() {
   const select = document.getElementById('txFilterCategory');
   const previousValue = select.value;
-  const optionHtml = (c) => `<option value="${c.id}">${c.name}</option>`;
+  const optionHtml = (c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`;
 
   let html = '<option value="">Все категории</option>';
   if (txFilterType === 'all') {
@@ -360,9 +374,9 @@ function renderCategoryManageLists() {
       const rollupName = c.rollup_id ? (categories.find((x) => x.id === c.rollup_id) || {}).name : null;
       return `
       <div class="cat-manage-row" data-id="${c.id}">
-        <input type="color" value="${c.color}" data-role="color">
-        <input type="text" value="${c.name}" data-role="name">
-        ${rollupName ? `<span class="rollup-label">на Дашборде → ${rollupName}</span>` : ''}
+        <input type="color" value="${escapeHtml(c.color)}" data-role="color">
+        <input type="text" value="${escapeHtml(c.name)}" data-role="name">
+        ${rollupName ? `<span class="rollup-label">на Дашборде → ${escapeHtml(rollupName)}</span>` : ''}
         <button class="btn small secondary" data-role="save">Сохранить</button>
         <button class="btn small danger" data-role="delete">Удалить</button>
       </div>
@@ -522,7 +536,7 @@ async function loadRecurringSuggestions(month) {
     <div class="recurring-suggestion" data-source-id="${s.source_id}">
       <span class="recurring-icon">↻</span>
       <div class="recurring-suggestion-text">
-        <div class="recurring-suggestion-title">${s.category_name} — повторяется ежемесячно</div>
+        <div class="recurring-suggestion-title">${escapeHtml(s.category_name)} — повторяется ежемесячно</div>
         <div class="recurring-suggestion-meta">В прошлый раз: ${fmt(s.amount)}</div>
       </div>
       <input type="number" class="recurring-amount-input" min="0" step="0.01" value="${s.amount}">
@@ -620,16 +634,16 @@ async function loadTransactionsTable() {
   emptyHint.style.display = 'none';
   tbody.innerHTML = rows.map((r) => `
     <tr data-id="${r.id}">
-      <td>${r.date}</td>
+      <td>${escapeHtml(r.date)}</td>
       <td>${r.type === 'expense' ? 'Расход' : 'Доход'}</td>
-      <td>${r.category_name}</td>
+      <td>${escapeHtml(r.category_name)}</td>
       <td class="amount-${r.type}">${fmt(r.amount)}${r.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : ''}${r.is_recurring ? `
         <span class="tooltip-wrap recurring-badge-wrap">
           <span class="recurring-badge">↻</span>
           <div class="tooltip-box">Повторяется каждый месяц. Чтобы отключить — нажмите ✎ и снимите галочку «повторять каждый месяц».</div>
         </span>
       ` : ''}</td>
-      <td>${r.note || ''}</td>
+      <td>${escapeHtml(r.note || '')}</td>
       <td class="row-actions">
         <button data-role="edit" title="Изменить">✎</button>
         <button data-role="delete" title="Удалить">✕</button>
@@ -660,7 +674,7 @@ async function loadTransactionsTable() {
 // ---------- Edit transaction (inline row) ----------
 function categoryOptionsHtml(type, selectedId) {
   return categories.filter((c) => c.type === type)
-    .map((c) => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${c.name}</option>`)
+    .map((c) => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`)
     .join('');
 }
 
@@ -669,7 +683,7 @@ function renderTxEditRow(tx) {
   if (!row) return;
   row.classList.add('tx-edit-row');
   row.innerHTML = `
-    <td><input type="date" class="edit-date" value="${tx.date}"></td>
+    <td><input type="date" class="edit-date" value="${escapeHtml(tx.date)}"></td>
     <td>
       <select class="edit-type">
         <option value="expense" ${tx.type === 'expense' ? 'selected' : ''}>Расход</option>
@@ -679,7 +693,7 @@ function renderTxEditRow(tx) {
     <td><select class="edit-category">${categoryOptionsHtml(tx.type, tx.category_id)}</select></td>
     <td><input type="number" class="edit-amount" min="0" step="0.01" value="${tx.amount}"></td>
     <td>
-      <input type="text" class="edit-note" value="${tx.note || ''}">
+      <input type="text" class="edit-note" value="${escapeHtml(tx.note || '')}">
       <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;">
         <input type="checkbox" class="edit-excluded" ${tx.excluded_from_total ? 'checked' : ''}> нал., не в общей сумме
       </label>
@@ -770,9 +784,9 @@ async function loadDashboardMonth() {
   } else {
     list.innerHTML = data.expenseByCategory.map((c) => `
       <div class="cat-row">
-        <div class="cat-dot" style="background:${c.color || CAT_COLORS_FALLBACK}"></div>
-        <div class="cat-name">${c.name}</div>
-        <div class="cat-bar-wrap"><div class="cat-bar" style="width:${c.pct}%; background:${c.color || CAT_COLORS_FALLBACK}"></div></div>
+        <div class="cat-dot" style="background:${escapeHtml(c.color || CAT_COLORS_FALLBACK)}"></div>
+        <div class="cat-name">${escapeHtml(c.name)}</div>
+        <div class="cat-bar-wrap"><div class="cat-bar" style="width:${c.pct}%; background:${escapeHtml(c.color || CAT_COLORS_FALLBACK)}"></div></div>
         <div class="cat-pct">${c.pct}%</div>
         <div class="cat-val">${fmt(c.amount)}</div>
       </div>
@@ -874,13 +888,13 @@ function categoryAmountMap(monthEntry) {
 }
 
 function catPhrase(names) {
-  return names.map((n) => `«${n}»`).join(', ');
+  return names.map((n) => `«${escapeHtml(n)}»`).join(', ');
 }
 
 function buildRatioLine(names, ratios, direction, wordCapital, baselineLabel) {
   const word = names.length === 1 ? 'категории' : 'категориях';
   const verb = direction === 'up' ? 'выросли' : 'снизились';
-  const withRatios = names.map((n, i) => `«${n}» (×${ratios[i].toFixed(1)})`).join(', ');
+  const withRatios = names.map((n, i) => `«${escapeHtml(n)}» (×${ratios[i].toFixed(1)})`).join(', ');
   return {
     cls: direction,
     text: `${wordCapital} в ${word} ${withRatios} ${verb} более чем в 1,5 раза по сравнению с ${baselineLabel}.`,
@@ -984,11 +998,11 @@ function refreshDashboard() {
 // Переиспользует .cat-row/.cat-bar-wrap/.cat-bar — тот же визуальный язык, что
 // «Расходы по категориям» на Дашборде (см. styles.css .cat-bar.exceeded).
 function renderLimitRow(row) {
-  const color = row.category_color || CAT_COLORS_FALLBACK;
+  const color = escapeHtml(row.category_color || CAT_COLORS_FALLBACK);
   return `
     <div class="cat-row">
       <div class="cat-dot" style="background:${color}"></div>
-      <div class="cat-name">${row.category_name}</div>
+      <div class="cat-name">${escapeHtml(row.category_name)}</div>
       <div class="cat-bar-wrap"><div class="cat-bar${row.exceeded ? ' exceeded' : ''}" style="width:${Math.min(100, row.pct)}%;${row.exceeded ? '' : ` background:${color}`}"></div></div>
       <div class="cat-pct">${Math.min(999, row.pct)}%</div>
       <div class="cat-val limit-val">${fmt(row.spent)} из ${fmt(row.limit)}</div>
@@ -1067,8 +1081,8 @@ async function loadLimitsTab() {
   const container = document.getElementById('limitsCatList');
   container.innerHTML = cats.map((c) => `
     <div class="limit-row" data-id="${c.id}">
-      <div class="cat-dot" style="background:${c.color}"></div>
-      <div class="limit-cat-name">${c.name}</div>
+      <div class="cat-dot" style="background:${escapeHtml(c.color)}"></div>
+      <div class="limit-cat-name">${escapeHtml(c.name)}</div>
       <div class="field">
         <label>Лимит в месяц</label>
         <input type="number" min="0" step="0.01" data-role="monthly" value="${c.monthly_limit ?? ''}" placeholder="не задан">
@@ -1114,7 +1128,7 @@ function limitNotificationMessage(n) {
   }
   const periodLabel = n.limit_type === 'month' ? 'в этом месяце' : 'в этом году';
   const limitLabel = n.limit_type === 'month' ? 'Месячный лимит' : 'Годовой лимит';
-  return `${limitLabel} категории «${n.category_name}» ${verb} (${n.pct}%) — потрачено ${fmt(n.spent)} из ${fmt(n.limit)} ${periodLabel}.`;
+  return `${limitLabel} категории «${escapeHtml(n.category_name)}» ${verb} (${n.pct}%) — потрачено ${fmt(n.spent)} из ${fmt(n.limit)} ${periodLabel}.`;
 }
 
 async function loadLimitNotifications() {
@@ -1263,7 +1277,7 @@ function renderGoalCategoryOptions() {
   // Категории, которые сами уже свёрнуты в другую (rollup_id задан), не предлагаем
   // в качестве цели второго уровня — это была бы путаница вложенности.
   const expenseCats = categories.filter((c) => c.type === 'expense' && !c.rollup_id);
-  const options = expenseCats.map((c) => `<option value="${c.id}">${c.name}</option>`).join('');
+  const options = expenseCats.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
   const existingSelect = document.getElementById('goalExistingCategory');
   const rollupSelect = document.getElementById('goalRollupCategory');
   existingSelect.innerHTML = options;
@@ -1326,7 +1340,7 @@ function ringSVG(pct, color) {
   // (CSS stroke на элементе переопределяет SVG-атрибут).
   return `<svg viewBox="0 0 84 84">
     <circle class="ring-track" cx="42" cy="42" r="${r}" fill="none" stroke-width="8"/>
-    <circle cx="42" cy="42" r="${r}" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round"
+    <circle cx="42" cy="42" r="${r}" fill="none" stroke="${escapeHtml(color)}" stroke-width="8" stroke-linecap="round"
       stroke-dasharray="${c}" stroke-dashoffset="${offset}"/>
   </svg>`;
 }
@@ -1347,8 +1361,8 @@ function renderGoalCard(g) {
     <div class="goal-card ${g.completed ? 'completed' : ''}" data-id="${g.id}">
       <div class="goal-ring-wrap">${ringSVG(g.pct, color)}<div class="goal-ring-pct">${g.pct}%</div></div>
       <div class="goal-info">
-        <h3>${g.name}</h3>
-        <div class="goal-meta">${fmt(g.progress)} из ${fmt(g.target_amount)} · категория «${g.category_name}»</div>
+        <h3>${escapeHtml(g.name)}</h3>
+        <div class="goal-meta">${fmt(g.progress)} из ${fmt(g.target_amount)} · категория «${escapeHtml(g.category_name)}»</div>
         ${monthlyHtml}
       </div>
       <div class="goal-actions-col">
