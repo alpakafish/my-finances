@@ -187,4 +187,9 @@ db.resetAllData = db.transaction(() => {
   insertDefaultCategories();
 });
 
+// Открыт наружу для backup.js — бэкапы кладутся в подпапку той же DATA_DIR,
+// что и сама база (desktop: Application Support, веб: ./data), а не куда-то
+// ещё, чтобы жить рядом и переживать то же самое обновление приложения.
+db.DATA_DIR = DATA_DIR;
+
 module.exports = db;

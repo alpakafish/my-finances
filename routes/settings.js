@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { BACKUPS_DIR } = require('../backup');
 
 const router = express.Router();
 
@@ -56,6 +57,36 @@ router.put('/currency', (req, res) => {
     INSERT INTO app_settings (key, value) VALUES ('currency', ?)
     ON CONFLICT(key) DO UPDATE SET value = ?
   `).run(currency, currency);
+  res.status(204).end();
+});
+
+// Резервные копии — статус для карточки-настройки и уведомления об ошибке
+// (см. backup.js). error — только если последний прогон закончился неудачей И
+// её ещё не закрыли крестиком за этот же день (backup_error_dismissed_date);
+// успешный следующий прогон сам перезапишет backup_last_result, так что
+// дата ошибки в дальнейшем не совпадёт с датой в записи и она погаснет сама
+// собой, отдельно ничего сбрасывать не нужно.
+router.get('/backups', (req, res) => {
+  const resultRow = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('backup_last_result');
+  const dismissedRow = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('backup_error_dismissed_date');
+  const lastResult = resultRow ? JSON.parse(resultRow.value) : null;
+  const dismissedDate = dismissedRow ? dismissedRow.value : null;
+
+  const error = (lastResult && !lastResult.ok && lastResult.date !== dismissedDate)
+    ? { date: lastResult.date, message: lastResult.error }
+    : null;
+
+  res.json({ folder: BACKUPS_DIR, error });
+});
+
+router.post('/backups/dismiss-error', (req, res) => {
+  const resultRow = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('backup_last_result');
+  const lastResult = resultRow ? JSON.parse(resultRow.value) : null;
+  const date = lastResult ? lastResult.date : new Date().toISOString().slice(0, 10);
+  db.prepare(`
+    INSERT INTO app_settings (key, value) VALUES ('backup_error_dismissed_date', ?)
+    ON CONFLICT(key) DO UPDATE SET value = ?
+  `).run(date, date);
   res.status(204).end();
 });
 

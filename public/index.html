@@ -402,6 +402,25 @@
     </div>
 
     <div class="card">
+      <div class="section-label">Резервные копии</div>
+      <div class="settings-row">
+        <div class="settings-row-text">
+          <div class="settings-row-title" style="display:flex; align-items:center; gap:6px;">
+            <span>Автоматические бэкапы</span>
+            <span class="tooltip-wrap info-icon-wrap">
+              <span class="info-icon">?</span>
+              <div class="tooltip-box">
+                Раз в день, при открытии приложения, автоматически сохраняется копия всех данных — хранятся последние 7. Восстановить — через «Импорт из Excel», выбрав нужный файл.
+              </div>
+            </span>
+          </div>
+          <div class="settings-row-desc" id="backupsPathDesc" style="display:none;"></div>
+        </div>
+        <button class="btn secondary" id="openBackupsFolderBtn">Открыть папку с бэкапами</button>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-label">Безопасность</div>
       <div class="settings-row">
         <div class="settings-row-text">
@@ -453,7 +472,10 @@
 
 </div>
 
-<div class="limit-notifications" id="limitNotifications"></div>
+<div class="limit-notifications" id="limitNotifications">
+  <div id="backupNotificationSlot"></div>
+  <div id="limitNotificationsList"></div>
+</div>
 
 <div class="toast" id="toast">
   <span id="toastMsg"></span>

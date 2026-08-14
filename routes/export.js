@@ -4,7 +4,10 @@ const db = require('../db');
 
 const router = express.Router();
 
-router.get('/', async (req, res) => {
+// Вынесено из обработчика роута, чтобы переиспользовать в backup.js — там нужен
+// точно тот же файл, что скачивает кнопка «Экспорт в Excel», просто записанный
+// на диск вместо HTTP-ответа (см. buildWorkbook ниже).
+function buildWorkbook() {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Мои финансы';
   workbook.created = new Date();
@@ -81,6 +84,11 @@ router.get('/', async (req, res) => {
     summarySheet.addRow(row);
   });
 
+  return workbook;
+}
+
+router.get('/', async (req, res) => {
+  const workbook = buildWorkbook();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="smeta-export-${new Date().toISOString().slice(0, 10)}.xlsx"`);
   await workbook.xlsx.write(res);
@@ -88,3 +96,4 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.buildWorkbook = buildWorkbook;

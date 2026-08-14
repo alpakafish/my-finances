@@ -2,6 +2,9 @@ const express = require('express');
 const path = require('path');
 
 const db = require('./db'); // инициализирует БД и сиды категорий при первом запуске
+const { startBackupSchedule } = require('./backup');
+
+startBackupSchedule(); // раз при старте + перепроверка раз в 6 часов, см. backup.js
 
 const app = express();
 app.use(express.json());

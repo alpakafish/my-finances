@@ -19,6 +19,8 @@ extraResources:
     to: app/server.js
   - from: ../db.js
     to: app/db.js
+  - from: ../backup.js
+    to: app/backup.js
   - from: ../routes
     to: app/routes
   - from: ../public

@@ -421,3 +421,245 @@ test('category spending limits: progress, notifications, dismissal, rollup inten
   const progressAfterRollupTx = await (await fetch(`${baseUrl}/api/limits/progress?month=${month}`)).json();
   assert.equal(progressAfterRollupTx.find((r) => r.category_id === limited.id).spent, 1150, 'rollup child spending must not affect the parent category limit');
 });
+
+test('"нал." (excluded_from_total): out of flat totals, still in category breakdown, yearly-totals keeps a 0/0/0 row for a cash-only year', async () => {
+  const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const salary = categories.find((c) => c.name === 'Зарплата');
+
+  // Год, которого не касаются другие тесты этого файла — иначе строка в
+  // yearly-totals могла бы существовать по другой причине.
+  const cashOnlyMonth = '2031-03';
+  const txRes = await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: `${cashOnlyMonth}-10`, type: 'income', category_id: salary.id, amount: 50000, note: '', excluded_from_total: true }),
+  });
+  const tx = await txRes.json();
+  assert.equal(tx.excluded_from_total, 1);
+
+  const summary = await (await fetch(`${baseUrl}/api/summary/${cashOnlyMonth}`)).json();
+  assert.equal(summary.totalIncome, 0, 'excluded from the flat month total');
+  assert.equal(summary.incomeByCategory.find((c) => c.name === 'Зарплата')?.amount, 50000, 'still counted in the category breakdown (charts)');
+
+  // Регрессия 2026-08-14: список лет раньше выводился из уже отфильтрованной
+  // суммы — год с ЕДИНСТВЕННОЙ «нал.»-операцией пропадал из таблицы целиком
+  // вместо строки 0/0/0. См. CLAUDE.md/routes/summary.js.
+  const yearlyTotals = await (await fetch(`${baseUrl}/api/summary/yearly-totals`)).json();
+  const row2031 = yearlyTotals.find((r) => r.year === '2031');
+  assert.ok(row2031, 'a year with only a cash-flagged transaction must still show a row, not disappear');
+  assert.equal(row2031.income, 0);
+});
+
+test('currency display setting: defaults to RUB, rejects a malformed code, persists', async () => {
+  const currDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-currency-'));
+  const { proc: currChild, baseUrl: currBaseUrl } = await startServer(currDataDir);
+  try {
+    const initial = await (await fetch(`${currBaseUrl}/api/settings/currency`)).json();
+    assert.equal(initial.currency, 'RUB');
+
+    const badRes = await fetch(`${currBaseUrl}/api/settings/currency`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currency: 'usd' }),
+    });
+    assert.equal(badRes.status, 400, 'lowercase/malformed code rejected');
+
+    const okRes = await fetch(`${currBaseUrl}/api/settings/currency`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currency: 'USD' }),
+    });
+    assert.equal(okRes.status, 204);
+
+    const after = await (await fetch(`${currBaseUrl}/api/settings/currency`)).json();
+    assert.equal(after.currency, 'USD');
+  } finally {
+    currChild.kill('SIGTERM');
+    removeDataDir(currDataDir);
+  }
+});
+
+test('category validation: whitespace-only rename rejected, reassign-on-delete target must exist and match type', async () => {
+  const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const food = categories.find((c) => c.name === 'Еда');
+  const salary = categories.find((c) => c.name === 'Зарплата'); // income — wrong type for reassigning an expense category
+
+  // Регрессия: пробельное имя раньше тихо затирало название категории (truthy
+  // строка проходила через COALESCE как непустое значение после .trim()).
+  const blankRes = await fetch(`${baseUrl}/api/categories/${food.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: '   ' }),
+  });
+  assert.equal(blankRes.status, 400);
+  const stillFood = await (await fetch(`${baseUrl}/api/categories`)).json();
+  assert.ok(stillFood.some((c) => c.id === food.id && c.name === 'Еда'), 'name must be unchanged after a rejected rename');
+
+  const toDelete = await (await fetch(`${baseUrl}/api/categories`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Категория для удаления', type: 'expense', color: '#111111' }),
+  })).json();
+  await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2031-04-01', type: 'expense', category_id: toDelete.id, amount: 10, note: '' }),
+  });
+
+  const missingTargetRes = await fetch(`${baseUrl}/api/categories/${toDelete.id}?reassignTo=999999`, { method: 'DELETE' });
+  assert.equal(missingTargetRes.status, 400, 'reassignTo pointing at a nonexistent category must be rejected');
+
+  const crossTypeRes = await fetch(`${baseUrl}/api/categories/${toDelete.id}?reassignTo=${salary.id}`, { method: 'DELETE' });
+  assert.equal(crossTypeRes.status, 400, 'reassigning an expense category onto an income one must be rejected');
+
+  const okTargetRes = await fetch(`${baseUrl}/api/categories/${toDelete.id}?reassignTo=${food.id}`, { method: 'DELETE' });
+  assert.equal(okTargetRes.status, 204, 'a same-type, existing target must still work');
+});
+
+test('goal validation: duration_months must be a positive integer, target_amount must stay positive on edit', async () => {
+  const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const food = categories.find((c) => c.name === 'Еда');
+
+  const zeroRes = await fetch(`${baseUrl}/api/goals`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Bad goal', target_amount: 1000, category_id: food.id, duration_months: 0 }),
+  });
+  assert.equal(zeroRes.status, 400);
+
+  const negativeRes = await fetch(`${baseUrl}/api/goals`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Bad goal', target_amount: 1000, category_id: food.id, duration_months: -3 }),
+  });
+  assert.equal(negativeRes.status, 400);
+
+  const goal = await (await fetch(`${baseUrl}/api/goals`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Editable goal', target_amount: 1000, category_id: food.id, duration_months: 4 }),
+  })).json();
+
+  // PUT раньше вообще не валидировал это поле: 0 тихо игнорировался через
+  // `|| null`, отрицательное значение сохранялось как есть.
+  const negativeEditRes = await fetch(`${baseUrl}/api/goals/${goal.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_amount: -500 }),
+  });
+  assert.equal(negativeEditRes.status, 400);
+});
+
+test('recurring transactions: suggestion appears a month later, confirming moves the flag forward with day-of-month clamped, skip is scoped to one month', async () => {
+  const rentCat = await (await fetch(`${baseUrl}/api/categories`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Recurring test rent', type: 'expense', color: '#222222' }),
+  })).json();
+
+  // 31-е число нарочно — проверяет clamp дня месяца в более коротком апреле (30 дней).
+  const source = await (await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2031-03-31', type: 'expense', category_id: rentCat.id, amount: 1000, note: '', is_recurring: true }),
+  })).json();
+  assert.equal(source.is_recurring, 1);
+
+  const aprilSuggestions = await (await fetch(`${baseUrl}/api/recurring/suggestions?month=2031-04`)).json();
+  const suggestion = aprilSuggestions.find((s) => s.source_id === source.id);
+  assert.ok(suggestion, 'a month later, with nothing yet in that category+type, must suggest repeating it');
+  assert.equal(suggestion.amount, 1000);
+
+  const confirmRes = await fetch(`${baseUrl}/api/recurring/${source.id}/confirm`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month: '2031-04', amount: 1000 }),
+  });
+  assert.equal(confirmRes.status, 201);
+  const created = await confirmRes.json();
+  assert.equal(created.date, '2031-04-30', "day-of-month clamped to April's real length (30, not 31)");
+  assert.equal(created.is_recurring, 1);
+
+  const sourceAfter = await (await fetch(`${baseUrl}/api/transactions?month=2031-03`)).json();
+  assert.equal(sourceAfter.find((t) => t.id === source.id).is_recurring, 0, 'the flag moves forward — the old source gets demoted');
+
+  const maySuggestions = await (await fetch(`${baseUrl}/api/recurring/suggestions?month=2031-05`)).json();
+  assert.ok(maySuggestions.some((s) => s.source_id === created.id));
+  const skipRes = await fetch(`${baseUrl}/api/recurring/${created.id}/skip`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month: '2031-05' }),
+  });
+  assert.equal(skipRes.status, 204);
+  const mayAfterSkip = await (await fetch(`${baseUrl}/api/recurring/suggestions?month=2031-05`)).json();
+  assert.ok(!mayAfterSkip.some((s) => s.source_id === created.id), 'dismissed for May');
+
+  const juneSuggestions = await (await fetch(`${baseUrl}/api/recurring/suggestions?month=2031-06`)).json();
+  assert.ok(juneSuggestions.some((s) => s.source_id === created.id), 'the May skip must not carry over to June');
+});
+
+test('recurring transactions: at most one active template per (category, type) — marking a new one demotes the old', async () => {
+  const rentCat = await (await fetch(`${baseUrl}/api/categories`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Recurring invariant test', type: 'expense', color: '#333333' }),
+  })).json();
+
+  const first = await (await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2031-07-01', type: 'expense', category_id: rentCat.id, amount: 100, note: '', is_recurring: true }),
+  })).json();
+  const second = await (await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2031-07-15', type: 'expense', category_id: rentCat.id, amount: 200, note: '', is_recurring: true }),
+  })).json();
+
+  const rows = await (await fetch(`${baseUrl}/api/transactions?month=2031-07`)).json();
+  assert.equal(rows.find((t) => t.id === first.id).is_recurring, 0, 'the first must be demoted once a second is marked recurring for the same category+type');
+  assert.equal(rows.find((t) => t.id === second.id).is_recurring, 1);
+});
+
+test('automatic backups: a today-dated file exists after startup, listed via settings with no error', async () => {
+  const backupDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-backup-'));
+  const { proc: backupChild, baseUrl: backupBaseUrl } = await startServer(backupDataDir);
+  try {
+    // startBackupSchedule() запускает первый прогон синхронно при старте, но не
+    // ждёт его — даём секунду на запись файла на диск.
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const today = new Date().toISOString().slice(0, 10);
+    const backupsDir = path.join(backupDataDir, 'backups');
+    assert.ok(fs.existsSync(path.join(backupsDir, `smeta-backup-${today}.xlsx`)), 'a backup file for today must exist after startup');
+
+    const status = await (await fetch(`${backupBaseUrl}/api/settings/backups`)).json();
+    assert.equal(status.folder, backupsDir);
+    assert.equal(status.error, null);
+  } finally {
+    backupChild.kill('SIGTERM');
+    removeDataDir(backupDataDir);
+  }
+});
+
+test('automatic backups: keeps only the newest 7, oldest pruned first', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-backup-prune-'));
+  const backupsDir = path.join(dir, 'backups');
+  fs.mkdirSync(backupsDir, { recursive: true });
+  const oldDates = ['2031-01-01', '2031-01-02', '2031-01-03', '2031-01-04', '2031-01-05', '2031-01-06', '2031-01-07', '2031-01-08', '2031-01-09'];
+  oldDates.forEach((d) => fs.writeFileSync(path.join(backupsDir, `smeta-backup-${d}.xlsx`), ''));
+
+  const { proc, baseUrl: pruneBaseUrl } = await startServer(dir);
+  try {
+    await new Promise((r) => setTimeout(r, 1000));
+    const remaining = fs.readdirSync(backupsDir).filter((f) => f.endsWith('.xlsx')).sort();
+    assert.equal(remaining.length, 7, 'keeps exactly 7 after pruning');
+    assert.ok(!remaining.includes('smeta-backup-2031-01-01.xlsx'), 'oldest deleted first');
+    assert.ok(!remaining.includes('smeta-backup-2031-01-02.xlsx'));
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});
+
+test('automatic backups: a failed attempt surfaces as a dismissible error, scoped to that day', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-backup-error-'));
+  const { proc, baseUrl: errBaseUrl } = await startServer(dir);
+  try {
+    await new Promise((r) => setTimeout(r, 1000)); // let the real startup backup finish first
+
+    // ENOSPC не воспроизвести по-настоящему в тесте — пишем провальный результат
+    // напрямую в БД (второе, отдельное соединение с тем же файлом), как это
+    // сделал бы backup.js после неудачной попытки.
+    const { DatabaseSync } = require('node:sqlite');
+    const raw = new DatabaseSync(path.join(dir, 'smeta.db'));
+    const today = new Date().toISOString().slice(0, 10);
+    const value = JSON.stringify({ date: today, ok: false, error: 'ENOSPC: no space left on device' });
+    raw.prepare("INSERT INTO app_settings (key, value) VALUES ('backup_last_result', ?) ON CONFLICT(key) DO UPDATE SET value = ?").run(value, value);
+    raw.close();
+
+    const withError = await (await fetch(`${errBaseUrl}/api/settings/backups`)).json();
+    assert.ok(withError.error, 'a failed result for today must surface as an error');
+    assert.equal(withError.error.date, today);
+
+    const dismissRes = await fetch(`${errBaseUrl}/api/settings/backups/dismiss-error`, { method: 'POST' });
+    assert.equal(dismissRes.status, 204);
+
+    const afterDismiss = await (await fetch(`${errBaseUrl}/api/settings/backups`)).json();
+    assert.equal(afterDismiss.error, null, 'dismissed error must not resurface for the same day');
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});

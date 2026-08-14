@@ -35,6 +35,12 @@ contextBridge.exposeInMainWorld('desktopApp', {
   // показывает main-процесс нативно — этот вызов просто их запускает.
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
 
+  // Кнопка «Открыть папку с бэкапами» (Settings) — открывает Finder/Проводник
+  // на папке с автоматическими резервными копиями (см. backup.js). В вебе
+  // недоступно (браузер не может открыть системный файловый менеджер) —
+  // там вместо кнопки просто показывается путь текстом, см. public/app.js.
+  openBackupsFolder: () => ipcRenderer.invoke('backups:open-folder'),
+
   // Настройка «Защищать приложение паролем» (Settings)
   getAppLockEnabled: () => ipcRenderer.invoke('app-lock:get'),
   setAppLockEnabled: (enabled) => ipcRenderer.invoke('app-lock:set', enabled),

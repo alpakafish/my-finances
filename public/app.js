@@ -822,6 +822,7 @@ function refreshDashboard() {
   refreshOverviewCharts();
   loadMonthlyLimitsProgress();
   loadLimitNotifications();
+  loadBackupNotification();
 }
 
 // ---------- Category spending limits ----------
@@ -919,7 +920,7 @@ async function loadLimitNotifications() {
     notifications = await api('/api/limits/notifications');
   } catch (e) { return; }
 
-  const container = document.getElementById('limitNotifications');
+  const container = document.getElementById('limitNotificationsList');
   container.innerHTML = notifications.map((n) => `
     <div class="limit-notification${n.notification_type === 'exceeded' ? ' exceeded' : ''}"
          data-category-id="${n.category_id}" data-limit-type="${n.limit_type}"
@@ -944,6 +945,70 @@ async function loadLimitNotifications() {
       } catch (e) { /* не критично — просто не запомнится, покажется снова при следующей загрузке */ }
     });
   });
+}
+
+// ---------- Уведомление о неудачном автобэкапе (справа вверху, тот же блок,
+// что лимиты) ---------- см. backup.js/routes/settings.js GET /backups: error
+// приходит только пока последняя попытка не удалась И её не закрыли крестиком
+// за этот же день — успешный следующий прогон гасит её сам.
+async function openBackupsFolder() {
+  const isDesktop = typeof window.desktopApp !== 'undefined' && window.desktopApp.isDesktop;
+  if (isDesktop) {
+    await window.desktopApp.openBackupsFolder();
+    return;
+  }
+  try {
+    const { folder } = await api('/api/settings/backups');
+    toast(`Папка с бэкапами: ${folder}`, false, 8000);
+  } catch (e) { /* не критично */ }
+}
+
+async function loadBackupNotification() {
+  let status;
+  try {
+    status = await api('/api/settings/backups');
+  } catch (e) { return; }
+
+  const container = document.getElementById('backupNotificationSlot');
+  if (!status.error) { container.innerHTML = ''; return; }
+
+  container.innerHTML = `
+    <div class="limit-notification backup-notification">
+      <div>
+        <b>Резервную копию сохранить не удалось</b>
+        Похоже, на диске не хватает места. Посмотрите бэкапы — можно удалить старые вручную — или освободите место любым другим способом. При следующем запуске приложение попробует снова.
+        <div class="limit-notification-actions">
+          <button type="button" class="btn small secondary" id="backupNotificationOpenBtn">Посмотреть бэкапы</button>
+        </div>
+      </div>
+      <button type="button" class="limit-notification-close" aria-label="Закрыть">✕</button>
+    </div>
+  `;
+
+  container.querySelector('#backupNotificationOpenBtn').addEventListener('click', openBackupsFolder);
+  container.querySelector('.limit-notification-close').addEventListener('click', async () => {
+    container.innerHTML = '';
+    try { await api('/api/settings/backups/dismiss-error', { method: 'POST' }); } catch (e) { /* не критично */ }
+  });
+}
+
+// Кнопка/путь в Настройках — десктоп открывает Finder/Проводник напрямую,
+// веб не может (браузер не даёт доступа к системному файловому менеджеру) —
+// там вместо кнопки показываем путь текстом.
+async function initBackupsSetting() {
+  const isDesktop = typeof window.desktopApp !== 'undefined' && window.desktopApp.isDesktop;
+  const btn = document.getElementById('openBackupsFolderBtn');
+  if (isDesktop) {
+    btn.addEventListener('click', openBackupsFolder);
+    return;
+  }
+  btn.style.display = 'none';
+  try {
+    const { folder } = await api('/api/settings/backups');
+    const desc = document.getElementById('backupsPathDesc');
+    desc.textContent = `Папка: ${folder}`;
+    desc.style.display = 'block';
+  } catch (e) { /* не критично */ }
 }
 
 // ---------- Export ----------
@@ -1491,7 +1556,7 @@ const TOUR_STEPS = [
     tab: 'settings',
     selector: '#tab-settings',
     title: 'Настройки',
-    text: 'Здесь — валюта отображения (меняет только символ, без пересчёта старых операций), защита приложения паролем/Touch ID, ручная проверка обновлений (последние две — в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
+    text: 'Здесь — валюта отображения (меняет только символ, без пересчёта старых операций), автоматические резервные копии раз в день (последние 7, восстановить — через «Импорт из Excel»), защита приложения паролем/Touch ID, ручная проверка обновлений (последние две — в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
   },
   {
     selector: '#helpBtn',
@@ -1636,6 +1701,7 @@ document.addEventListener('keydown', (e) => {
   await initAppVersion();
   initUpdateCheckSetting();
   await initThemeSetting();
+  await initBackupsSetting();
 
   if (!(await hasSeenOnboarding())) {
     setTimeout(startTour, 400);

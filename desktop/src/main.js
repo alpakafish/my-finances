@@ -129,6 +129,16 @@ ipcMain.handle('app:get-version', () => app.getVersion());
 // предлагает установить, а не качает заново.
 ipcMain.handle('update:check', () => triggerUpdateCheck());
 
+// Кнопка «Открыть папку с бэкапами» в Settings — mkdir на случай, если её
+// открывают до самого первого прогона backup.js (папка ещё не создана),
+// иначе shell.openPath на несуществующий путь покажет системную ошибку
+// вместо пустой (но существующей) папки.
+ipcMain.handle('backups:open-folder', () => {
+  const backupsDir = path.join(dataDir(), 'backups');
+  fs.mkdirSync(backupsDir, { recursive: true });
+  return shell.openPath(backupsDir);
+});
+
 // ---------- Тема оформления ----------
 // theme:get-initial-sync — синхронный IPC (ipcRenderer.sendSync), а не handle/invoke:
 // preload.js должен успеть отдать renderer'у готовое значение ДО первой отрисовки

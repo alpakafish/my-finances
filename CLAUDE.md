@@ -140,6 +140,21 @@ one.
   build + actual launch exposes the missing-file problem, per "Rebuild
   before claiming a desktop-side fix works" above. Fix: wrap that kind of
   require in try/catch with a safe fallback rather than assuming it's there.
+- **Same root cause, different trigger: a brand-new root-level shared `.js`
+  file (not just `package.json`) crash-loops the desktop backend too, if you
+  forget to add it to `extraResources`.** `extraResources` in
+  `electron-builder.yml` lists `server.js`/`db.js`/`routes/`/`public/`/
+  `node_modules/` individually — it is **not** a glob over the repo root, so
+  a new sibling file (e.g. `backup.js`, added 2026-08-14 for the automatic-
+  backup feature, required from `server.js`) is silently left out of the
+  packaged `Resources/app/` until you add an explicit entry for it. Same
+  symptom as above (`Cannot find module './backup'`, immediate crash-loop,
+  app never opens a window) and same detection gap (`npm test` runs
+  `server.js` from the repo directly, `require('./backup')` resolves fine
+  there — only a packaged `--dir` build catches it). **Whenever you add a new
+  top-level `.js` file that `server.js` (or anything else already in
+  `extraResources`) requires, add a matching `extraResources` entry in the
+  same change** — don't wait to discover it via a crash-looped test build.
 
 **`window.prompt()` does not render anything in an Electron `BrowserWindow` —
 found via a real user report on v1.0.11, 2026-08-12.** Unlike
@@ -224,13 +239,30 @@ toolchain deps" stance elsewhere in this file).
 
 ## Testing
 
+See `TESTING.md` for the full picture — test suites, how to run them, and a
+**regression log** (bug → date found → which test guards it) worth checking
+before you touch code near a past bug. Add a test (and a log row if it's
+bug-driven, not just new-feature coverage) alongside every fix, not just a
+one-off manual check — a manual verification proves the fix once; it doesn't
+stop the same bug from coming back silently later.
+
 - **Never** run a test server against the default `DATA_DIR` (`./data/`) —
   that's the user's real financial data. Always set `DATA_DIR=/tmp/...` (or
   similar) when starting `server.js` for manual/automated testing.
 - Backend integration tests: `npm test` (root) — spawns real `server.js`
   processes against temp `DATA_DIR`s, hits the real HTTP API.
-- Desktop smoke test: `cd desktop && npm test` — boots the actual packaged
-  Electron flow and checks the backend comes up and the DB seeds correctly.
+- Desktop smoke test: `cd desktop && npm test` — `launch.test.js` boots the
+  Electron app in **dev mode against the source `desktop/` directory**
+  (`app.isPackaged` is `false`), not a packaged build — despite this file
+  previously calling it "the actual packaged Electron flow", it does not
+  exercise `Resources/app/` module resolution at all (see `extra-resources.
+  test.js` below and TESTING.md's "known gap" for what that misses).
+  `extra-resources.test.js` — a static check (no Electron, no build) that
+  every root-level sibling file `server.js` requires (`./db`, `./backup`,
+  ...) has a matching `extraResources` entry in `electron-builder.yml`;
+  added 2026-08-14 after the *second* occurrence of the crash-loop bug
+  below (first was `package.json`, second was `backup.js`) to catch the
+  whole class instead of one file at a time.
 - Rebuild before claiming a desktop-side fix works: `cd desktop && npx
   electron-builder --mac --dir --arm64`, then verify the built `.app`'s
   `Resources/app/public/app.js` (or wherever relevant) actually contains the

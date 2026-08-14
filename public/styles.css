@@ -280,6 +280,7 @@ td.amount-income { color: var(--color-income); }
 .limit-notification b { color: var(--color-text); display: block; margin-bottom: 2px; font-size: 13px; }
 .limit-notification-close { border: none; background: none; cursor: pointer; color: var(--color-text-tertiary); font-size: 16px; line-height: 1; flex-shrink: 0; padding: 0; }
 .limit-notification-close:hover { color: var(--color-text); }
+.limit-notification-actions { margin-top: 8px; }
 
 .toast {
   position: fixed; bottom: 20px; right: 20px; background: var(--color-chip-bg); color: var(--color-chip-text);
