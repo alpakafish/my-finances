@@ -129,9 +129,19 @@ const CURRENCIES = {
 };
 let currentCurrency = 'RUB';
 
-function fmt(n) {
+// kopecks: true показывает точную сумму с копейками (99,9 → «99,90», не
+// «100») — пока только для списка операций (вкладка «Операции», см.
+// loadTransactionsTable/loadRecurringSuggestions/refreshTrashCard ниже), где
+// округление реально теряло данные, которые пользователь только что ввёл.
+// Остальные места (Дашборд, Лимиты, Цели, По годам) — по-прежнему округляют:
+// это агрегированные суммы за период, где копейки только шумят, не так
+// значимы, как в списке конкретных, только что введённых операций.
+function fmt(n, { kopecks = false } = {}) {
   const { symbol, position } = CURRENCIES[currentCurrency] || CURRENCIES.RUB;
-  const abs = Math.round(Math.abs(n)).toLocaleString('ru-RU');
+  const absNum = Math.abs(n);
+  const abs = kopecks
+    ? absNum.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : Math.round(absNum).toLocaleString('ru-RU');
   const sign = n < 0 ? '-' : '';
   return position === 'before' ? `${sign}${symbol}${abs}` : `${sign}${abs} ${symbol}`;
 }
@@ -213,7 +223,7 @@ function trashRowLabel(row) {
   const sign = row.type === 'expense' ? '−' : '+';
   const cash = row.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : '';
   const note = row.note ? ` · ${escapeHtml(row.note)}` : '';
-  return `${escapeHtml(row.date)} · ${escapeHtml(row.category_name)} · ${sign}${fmt(row.amount)}${cash}${note}`;
+  return `${escapeHtml(row.date)} · ${escapeHtml(row.category_name)} · ${sign}${fmt(row.amount, { kopecks: true })}${cash}${note}`;
 }
 
 async function refreshTrashCard() {
@@ -537,7 +547,7 @@ async function loadRecurringSuggestions(month) {
       <span class="recurring-icon">↻</span>
       <div class="recurring-suggestion-text">
         <div class="recurring-suggestion-title">${escapeHtml(s.category_name)} — повторяется ежемесячно</div>
-        <div class="recurring-suggestion-meta">В прошлый раз: ${fmt(s.amount)}</div>
+        <div class="recurring-suggestion-meta">В прошлый раз: ${fmt(s.amount, { kopecks: true })}</div>
       </div>
       <input type="number" class="recurring-amount-input" min="0" step="0.01" value="${s.amount}">
       <button type="button" class="btn small recurring-confirm-btn">Добавить</button>
@@ -637,7 +647,7 @@ async function loadTransactionsTable() {
       <td>${escapeHtml(r.date)}</td>
       <td>${r.type === 'expense' ? 'Расход' : 'Доход'}</td>
       <td>${escapeHtml(r.category_name)}</td>
-      <td class="amount-${r.type}">${fmt(r.amount)}${r.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : ''}${r.is_recurring ? `
+      <td class="amount-${r.type}">${fmt(r.amount, { kopecks: true })}${r.excluded_from_total ? ' <span class="cash-badge">нал.</span>' : ''}${r.is_recurring ? `
         <span class="tooltip-wrap recurring-badge-wrap">
           <span class="recurring-badge">↻</span>
           <div class="tooltip-box">Повторяется каждый месяц. Чтобы отключить — нажмите ✎ и снимите галочку «повторять каждый месяц».</div>
