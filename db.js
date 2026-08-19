@@ -153,6 +153,7 @@ db.exec(`
     excluded_from_total INTEGER NOT NULL DEFAULT 0,
     is_recurring INTEGER NOT NULL DEFAULT 0,
     auto_confirm INTEGER NOT NULL DEFAULT 0,
+    uuid TEXT,
     deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
@@ -198,12 +199,31 @@ if (!transactionColumns.includes('is_recurring')) {
 if (!transactionColumns.includes('auto_confirm')) {
   db.exec('ALTER TABLE transactions ADD COLUMN auto_confirm INTEGER NOT NULL DEFAULT 0');
 }
+// Стабильный идентификатор операции, переживающий экспорт/импорт — основа
+// "умного" переноса между устройствами без сервера (см. routes/import.js):
+// раньше импорт мог только "это точно новая" или "это точный дубль по всем
+// полям", поэтому отредактированная на одном устройстве операция при
+// повторном импорте на другом создавала дубль вместо обновления. uuid как
+// последняя колонка в Excel-экспорте (см. routes/export.js, тот же принцип,
+// что «Метка»/«Повтор.») позволяет импорту найти "ту же" операцию и
+// обновить, а не задвоить. Бэкфилл ниже — чтобы это работало и для операций,
+// созданных до этой миграции, не только для новых.
+if (!transactionColumns.includes('uuid')) {
+  db.exec('ALTER TABLE transactions ADD COLUMN uuid TEXT');
+  const { randomUUID } = require('crypto');
+  const withoutUuid = db.prepare('SELECT id FROM transactions WHERE uuid IS NULL').all();
+  const setUuid = db.prepare('UPDATE transactions SET uuid = ? WHERE id = ?');
+  db.transaction(() => { withoutUuid.forEach((r) => setUuid.run(randomUUID(), r.id)); })();
+}
 // deleted_transactions уже существовало (не CREATE TABLE-время-фичи) до
 // добавления auto_confirm выше — та же ALTER-миграция нужна и здесь, иначе
 // на уже созданных БД снимок при удалении падал бы на нехватке колонки.
 const deletedTransactionColumns = db.prepare('PRAGMA table_info(deleted_transactions)').all().map((c) => c.name);
 if (!deletedTransactionColumns.includes('auto_confirm')) {
   db.exec('ALTER TABLE deleted_transactions ADD COLUMN auto_confirm INTEGER NOT NULL DEFAULT 0');
+}
+if (!deletedTransactionColumns.includes('uuid')) {
+  db.exec('ALTER TABLE deleted_transactions ADD COLUMN uuid TEXT');
 }
 
 const DEFAULT_EXPENSE_CATEGORIES = [

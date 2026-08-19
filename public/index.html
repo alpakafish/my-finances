@@ -481,6 +481,27 @@
     </div>
 
     <div class="card">
+      <div class="section-label">Экспорт за период</div>
+      <div class="settings-row">
+        <div class="settings-row-text">
+          <div class="settings-row-title">Выгрузить только часть операций</div>
+          <div class="settings-row-desc">Например, для бухгалтерии за конкретный год — выберите даты «с» и «по» и нажмите «Скачать». Обычная кнопка «Экспорт в Excel» в шапке выгружает всё как раньше — этого поля она не касается, как и автоматические резервные копии.</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+          <div class="field">
+            <label for="periodExportFromInput">С</label>
+            <input type="date" id="periodExportFromInput">
+          </div>
+          <div class="field">
+            <label for="periodExportToInput">По</label>
+            <input type="date" id="periodExportToInput">
+          </div>
+          <button class="btn secondary" id="periodExportBtn">Скачать</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="section-label">Резервные копии</div>
       <div class="settings-row">
         <div class="settings-row-text">

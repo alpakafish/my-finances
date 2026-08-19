@@ -1,4 +1,5 @@
 const express = require('express');
+const { randomUUID } = require('crypto');
 const db = require('../db');
 
 const router = express.Router();
@@ -47,8 +48,8 @@ router.post('/', (req, res) => {
       db.prepare('UPDATE transactions SET is_recurring = 0, auto_confirm = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1').run(category_id, type);
     }
     return db.prepare(
-      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(date, type, category_id, amount, note || '', excluded_from_total ? 1 : 0, is_recurring ? 1 : 0, is_recurring && auto_confirm ? 1 : 0).lastInsertRowid;
+      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm, uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(date, type, category_id, amount, note || '', excluded_from_total ? 1 : 0, is_recurring ? 1 : 0, is_recurring && auto_confirm ? 1 : 0, randomUUID()).lastInsertRowid;
   });
   const id = insert();
   res.status(201).json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(id));
@@ -80,8 +81,8 @@ router.post('/trash/:id/restore', (req, res) => {
         .run(trashed.category_id, trashed.type);
     }
     const id = db.prepare(
-      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(trashed.date, trashed.type, trashed.category_id, trashed.amount, trashed.note, trashed.excluded_from_total, trashed.is_recurring, trashed.auto_confirm).lastInsertRowid;
+      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm, uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(trashed.date, trashed.type, trashed.category_id, trashed.amount, trashed.note, trashed.excluded_from_total, trashed.is_recurring, trashed.auto_confirm, trashed.uuid || randomUUID()).lastInsertRowid;
     db.prepare('DELETE FROM deleted_transactions WHERE id = ?').run(req.params.id);
     return id;
   });
@@ -139,11 +140,11 @@ router.delete('/:id', (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Операция не найдена' });
   const del = db.transaction(() => {
     db.prepare(`
-      INSERT INTO deleted_transactions (date, type, category_id, category_name, amount, note, excluded_from_total, is_recurring, auto_confirm)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO deleted_transactions (date, type, category_id, category_name, amount, note, excluded_from_total, is_recurring, auto_confirm, uuid)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       existing.date, existing.type, existing.category_id, existing.category_name,
-      existing.amount, existing.note, existing.excluded_from_total, existing.is_recurring, existing.auto_confirm
+      existing.amount, existing.note, existing.excluded_from_total, existing.is_recurring, existing.auto_confirm, existing.uuid
     );
     db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
     // Держим только последние 10 — старше см. в бэкапах (backup.js).

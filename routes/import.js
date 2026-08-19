@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
+const { randomUUID } = require('crypto');
 const db = require('../db');
 
 const router = express.Router();
@@ -86,21 +87,45 @@ router.post('/', upload.single('file'), async (req, res) => {
   const existsStmt = db.prepare(
     'SELECT id FROM transactions WHERE date = ? AND type = ? AND category_id = ? AND amount = ? AND note = ? AND excluded_from_total = ? AND is_recurring = ?'
   );
+  const findByUuidStmt = db.prepare('SELECT * FROM transactions WHERE uuid = ?');
   const insertStmt = db.prepare(
-    'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
+  const updateStmt = db.prepare(
+    'UPDATE transactions SET date = ?, type = ?, category_id = ?, amount = ?, note = ?, excluded_from_total = ?, is_recurring = ? WHERE id = ?'
+  );
+  // ? в конце — id, который демоутить нельзя (сама обновляемая строка, если
+  // она уже recurring; при обычной вставке передаём 0, что не совпадёт ни с
+  // одним реальным id).
   const demoteRecurringStmt = db.prepare(
-    'UPDATE transactions SET is_recurring = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1'
+    'UPDATE transactions SET is_recurring = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1 AND id != ?'
   );
 
   let imported = 0;
+  let updated = 0;
   let skippedDuplicates = 0;
   let skippedInvalid = 0;
   const newCategories = new Set();
   const sheetsProcessed = [];
 
-  // Общая для обоих форматов часть: найти/создать категорию, пропустить дубль, вставить.
-  function importRow(date, type, amount, note, categoryName, excludedFromTotal = false, isRecurring = false) {
+  // Общая для обоих форматов часть: найти/создать категорию, сопоставить с уже
+  // существующей операцией (по uuid, если он был в файле — перенос между
+  // устройствами, см. export.js) или по точному совпадению всех полей (старые
+  // файлы без uuid, и легаси-формат «Траты/Приход»), обновить или вставить.
+  //
+  // Раньше (до uuid) импорт умел только "точно новая" или "точный дубль по
+  // всем полям" — операция, отредактированная на одном устройстве, при
+  // повторном импорте на другом создавала БЫ дубль вместо обновления
+  // существующей. С uuid: нашли ту же операцию, но значения разошлись —
+  // обновляем существующую строку, а не вставляем вторую. uuid есть, но
+  // локально такой операции ещё нет — значит она создана на другом
+  // устройстве позже последней синхронизации, вставляем как новую, сохраняя
+  // тот же uuid (не генерируя новый), чтобы будущие синхронизации продолжали
+  // находить её. Удаления сознательно НЕ переносятся этим механизмом —
+  // операция, удалённая на одном устройстве, при импорте старого экспорта с
+  // другого может "ожить" снова; для реальной синхронизации без этого
+  // ограничения нужен сервер, а не просто файл.
+  function importRow(date, type, amount, note, categoryName, excludedFromTotal = false, isRecurring = false, uuid = null) {
     if (!date || !type || amount === null || amount <= 0) { skippedInvalid++; return; }
     const fallbackCategory = type === 'expense' ? FALLBACK_EXPENSE_CATEGORY : FALLBACK_INCOME_CATEGORY;
     const name = categoryName || fallbackCategory;
@@ -110,16 +135,35 @@ router.post('/', upload.single('file'), async (req, res) => {
     const { id: categoryId, created } = findOrCreateCategory(name, type);
     if (created) newCategories.add(`${name} (${type === 'expense' ? 'расход' : 'доход'})`);
 
-    if (existsStmt.get(date, type, categoryId, amount, note, excluded, recurring)) { skippedDuplicates++; return; }
+    const existingByUuid = uuid ? findByUuidStmt.get(uuid) : null;
+
+    if (existingByUuid) {
+      const unchanged = existingByUuid.date === date && existingByUuid.type === type
+        && existingByUuid.category_id === categoryId && existingByUuid.amount === amount
+        && existingByUuid.note === note && existingByUuid.excluded_from_total === excluded
+        && existingByUuid.is_recurring === recurring;
+      if (unchanged) { skippedDuplicates++; return; }
+      if (recurring) demoteRecurringStmt.run(categoryId, type, existingByUuid.id);
+      updateStmt.run(date, type, categoryId, amount, note, excluded, recurring, existingByUuid.id);
+      updated++;
+      return;
+    }
+
+    // Без совпадения по uuid — старый путь, точный дубль по значениям (uuid
+    // либо отсутствовал в файле вовсе, либо был, но такой операции здесь ещё нет).
+    if (!uuid && existsStmt.get(date, type, categoryId, amount, note, excluded, recurring)) {
+      skippedDuplicates++;
+      return;
+    }
 
     // Тот же инвариант, что в routes/transactions.js POST — не более одной
     // активной повторяющейся операции на (категорию, тип). Обычный экспорт
     // этого приложения не может нарушить его сам по себе (в БД-источнике
     // инвариант уже соблюдён), но это защита на случай вручную отредактированного
     // файла с несколькими «Повтор.=да» на одну категорию.
-    if (recurring) demoteRecurringStmt.run(categoryId, type);
+    if (recurring) demoteRecurringStmt.run(categoryId, type, 0);
 
-    insertStmt.run(date, type, categoryId, amount, note, excluded, recurring);
+    insertStmt.run(date, type, categoryId, amount, note, excluded, recurring, uuid || randomUUID());
     imported++;
   }
 
@@ -130,11 +174,12 @@ router.post('/', upload.single('file'), async (req, res) => {
       // Собственный формат экспорта этого приложения (см. routes/export.js, лист
       // «Операции») — используется для бэкапа/переноса данных между устройствами:
       // один лист на оба типа операций, тип в столбце B, 1 строка заголовка.
-      // Столбцы 6 «Метка» («нал.» или пусто) и 7 «Повтор.» («да» или пусто)
-      // появились позже столбцов 1–5 и намеренно идут последними (см. export.js)
-      // — старые файлы, экспортированные до этих изменений, их просто не имеют,
-      // cellText на несуществующей ячейке вернёт '', что корректно читается как
-      // «нет метки»/«не повторяется».
+      // Столбцы 6 «Метка» («нал.» или пусто), 7 «Повтор.» («да» или пусто) и
+      // 8 «UUID» появились позже столбцов 1–5 и намеренно идут последними (см.
+      // export.js) — старые файлы, экспортированные до этих изменений, их
+      // просто не имеют, cellText на несуществующей ячейке вернёт '', что
+      // корректно читается как «нет метки»/«не повторяется»/«нет uuid, сверять
+      // по значениям, как раньше» (см. importRow выше).
       if (name === 'Операции') {
         sheetsProcessed.push(name);
         for (let rowNum = 2; rowNum <= ws.rowCount; rowNum++) {
@@ -147,7 +192,8 @@ router.post('/', upload.single('file'), async (req, res) => {
           const categoryName = cellText(row.getCell(3));
           const excludedFromTotal = cellText(row.getCell(6)).toLowerCase() === 'нал.';
           const isRecurring = cellText(row.getCell(7)).toLowerCase() === 'да';
-          importRow(date, type, amount, note, categoryName, excludedFromTotal, isRecurring);
+          const uuid = cellText(row.getCell(8)) || null;
+          importRow(date, type, amount, note, categoryName, excludedFromTotal, isRecurring, uuid);
         }
         return;
       }
@@ -181,6 +227,7 @@ router.post('/', upload.single('file'), async (req, res) => {
 
   res.json({
     imported,
+    updated,
     skippedDuplicates,
     skippedInvalid,
     newCategories: Array.from(newCategories),

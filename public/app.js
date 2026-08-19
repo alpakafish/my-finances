@@ -1391,6 +1391,18 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   window.location.href = '/api/export';
 });
 
+// Настройки → «Экспорт за период» — та же кнопка «Экспорт в Excel» в шапке
+// намеренно не трогается (осталась «выгрузить всё» в один клик, как раньше);
+// это отдельная, менее заметная опция специально для случаев вроде
+// бухгалтерии за конкретный год, чтобы не загромождать основной путь.
+document.getElementById('periodExportBtn').addEventListener('click', () => {
+  const from = document.getElementById('periodExportFromInput').value;
+  const to = document.getElementById('periodExportToInput').value;
+  if (!from || !to) { toast('Укажите обе даты — «с» и «по»', true); return; }
+  if (from > to) { toast('Дата «с» должна быть раньше даты «по»', true); return; }
+  window.location.href = `/api/export?from=${from}&to=${to}`;
+});
+
 // ---------- Import ----------
 document.getElementById('importBtn').addEventListener('click', () => {
   document.getElementById('importFile').click();
@@ -1412,6 +1424,7 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'Ошибка импорта');
     const parts = [`Добавлено операций: ${body.imported}`];
+    if (body.updated) parts.push(`обновлено: ${body.updated}`);
     if (body.skippedDuplicates) parts.push(`пропущено дублей: ${body.skippedDuplicates}`);
     if (body.newCategories.length) parts.push(`новые категории: ${body.newCategories.join(', ')}`);
     toast(parts.join(' · '), false, 6000);
@@ -1968,7 +1981,7 @@ const TOUR_STEPS = [
     tab: 'settings',
     selector: '#tab-settings',
     title: 'Настройки',
-    text: 'Здесь — валюта отображения (меняет только символ, без пересчёта старых операций), точка отсчёта для сверки с картой (дата и сумма, от которой считается накопительный остаток — после заполнения на Дашборде появится карточка сравнения с тем, что реально на карте), автоматические резервные копии раз в день (последние 7, восстановить — через «Импорт из Excel»), защита приложения паролем/Touch ID, ручная проверка обновлений (последние две — в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
+    text: 'Здесь — валюта отображения (меняет только символ, без пересчёта старых операций), точка отсчёта для сверки с картой (дата и сумма, от которой считается накопительный остаток — после заполнения на Дашборде появится карточка сравнения с тем, что реально на карте), экспорт в Excel только за выбранный период (например, для бухгалтерии за год — кнопка «Экспорт в Excel» в шапке по-прежнему выгружает всё), автоматические резервные копии раз в день (последние 7, восстановить — через «Импорт из Excel»), защита приложения паролем/Touch ID, ручная проверка обновлений (последние две — в desktop-версии) и полная очистка данных, с подтверждением, что это необратимо.',
   },
   {
     selector: '#helpBtn',

@@ -288,6 +288,123 @@ test('export from one instance re-imports cleanly on a fresh one (multi-device b
   }
 });
 
+test('partial export (?from=&to=): only the requested range round-trips; malformed/half-supplied range is rejected, not silently treated as "everything"', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-partial-export-'));
+  const { proc, baseUrl: exportBaseUrl } = await startServer(dir);
+  try {
+    const categories = await (await fetch(`${exportBaseUrl}/api/categories`)).json();
+    const food = categories.find((c) => c.name === 'Еда');
+    const seed = [
+      { date: '2026-01-15', type: 'expense', category_id: food.id, amount: 100, note: 'january' },
+      { date: '2026-06-15', type: 'expense', category_id: food.id, amount: 200, note: 'june' },
+      { date: '2026-12-15', type: 'expense', category_id: food.id, amount: 300, note: 'december' },
+    ];
+    for (const tx of seed) {
+      await fetch(`${exportBaseUrl}/api/transactions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tx),
+      });
+    }
+
+    // A range without a matching "to" (or a malformed date) must 400, not
+    // silently fall back to a full export — that would be a real backup/
+    // period-accounting footgun (user thinks they got June only, actually got everything).
+    assert.equal((await fetch(`${exportBaseUrl}/api/export?from=2026-06-01`)).status, 400);
+    assert.equal((await fetch(`${exportBaseUrl}/api/export?from=not-a-date&to=2026-06-30`)).status, 400);
+
+    const partialRes = await fetch(`${exportBaseUrl}/api/export?from=2026-06-01&to=2026-06-30`);
+    assert.equal(partialRes.status, 200);
+    assert.match(partialRes.headers.get('content-disposition'), /2026-06-01_2026-06-30/, 'filename should reflect the range, not a plain date');
+    const partialBuffer = Buffer.from(await partialRes.arrayBuffer());
+
+    const importDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-partial-import-'));
+    const { proc: importProc, baseUrl: importBaseUrl } = await startServer(importDir);
+    try {
+      const form = new FormData();
+      form.append('file', new Blob([partialBuffer]), 'partial.xlsx');
+      const importRes = await fetch(`${importBaseUrl}/api/import`, { method: 'POST', body: form });
+      const result = await importRes.json();
+      assert.equal(result.imported, 1, 'only the one transaction inside 2026-06 should be in this export');
+
+      const june = await (await fetch(`${importBaseUrl}/api/transactions?month=2026-06`)).json();
+      assert.ok(june.some((t) => t.note === 'june'));
+      const january = await (await fetch(`${importBaseUrl}/api/transactions?month=2026-01`)).json();
+      assert.equal(january.length, 0, 'january is outside the exported range, must not have come along');
+      const december = await (await fetch(`${importBaseUrl}/api/transactions?month=2026-12`)).json();
+      assert.equal(december.length, 0, 'december is outside the exported range, must not have come along');
+    } finally {
+      importProc.kill('SIGTERM');
+      removeDataDir(importDir);
+    }
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});
+
+test('sync-aware import: a transaction carries its uuid to a new device, re-importing the same file is still a no-op, and re-importing an older export after a local edit updates the row instead of duplicating it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-sync-'));
+  const { proc, baseUrl: syncBaseUrl } = await startServer(dir);
+  try {
+    const categories = await (await fetch(`${syncBaseUrl}/api/categories`)).json();
+    const food = categories.find((c) => c.name === 'Еда');
+
+    const created = await (await fetch(`${syncBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: '2026-09-01', type: 'expense', category_id: food.id, amount: 500, note: 'sync test' }),
+    })).json();
+
+    const exportRes = await fetch(`${syncBaseUrl}/api/export`);
+    const oldBuffer = Buffer.from(await exportRes.arrayBuffer());
+
+    // Fresh "device B" — doesn't have this transaction yet, so importing the
+    // export inserts it, carrying the SAME uuid forward (not a fresh one) —
+    // that's what lets a later re-sync recognize it as the same operation.
+    const deviceBDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-sync-deviceb-'));
+    const { proc: procB, baseUrl: deviceBUrl } = await startServer(deviceBDir);
+    try {
+      const form1 = new FormData();
+      form1.append('file', new Blob([oldBuffer]), 'export.xlsx');
+      const import1 = await (await fetch(`${deviceBUrl}/api/import`, { method: 'POST', body: form1 })).json();
+      assert.equal(import1.imported, 1);
+      assert.equal(import1.updated, 0);
+
+      // Re-importing the exact same file again on device B — matches by
+      // uuid, values are identical, must be a no-op skip, not a duplicate.
+      const form2 = new FormData();
+      form2.append('file', new Blob([oldBuffer]), 'export.xlsx');
+      const import2 = await (await fetch(`${deviceBUrl}/api/import`, { method: 'POST', body: form2 })).json();
+      assert.equal(import2.imported, 0);
+      assert.equal(import2.skippedDuplicates, 1);
+      const bRows = await (await fetch(`${deviceBUrl}/api/transactions?month=2026-09`)).json();
+      assert.equal(bRows.length, 1, 'must still be exactly one row, not duplicated');
+    } finally {
+      procB.kill('SIGTERM');
+      removeDataDir(deviceBDir);
+    }
+
+    // Edit the original transaction on device A (this is the scenario the
+    // old value-only dedup got wrong: re-importing an older export of the
+    // now-edited row used to insert a second, duplicate row instead of
+    // recognizing "this is the same operation, just changed").
+    await fetch(`${syncBaseUrl}/api/transactions/${created.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: 999 }),
+    });
+
+    const form3 = new FormData();
+    form3.append('file', new Blob([oldBuffer]), 'old-export.xlsx');
+    const import3 = await (await fetch(`${syncBaseUrl}/api/import`, { method: 'POST', body: form3 })).json();
+    assert.equal(import3.imported, 0);
+    assert.equal(import3.updated, 1);
+
+    const aRows = await (await fetch(`${syncBaseUrl}/api/transactions?month=2026-09`)).json();
+    assert.equal(aRows.length, 1, 'must still be exactly one row — updated, not duplicated');
+    assert.equal(aRows[0].amount, 500, 'the imported file\'s value wins the merge, matching "import overwrites the local row it matches"');
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});
+
 test('settings: delete-all-data wipes transactions/goals and resets categories to defaults', async () => {
   // Собственный процесс/БД — не хотим тереть данные, накопленные другими тестами этого файла.
   const wipeDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-wipe-'));

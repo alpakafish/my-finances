@@ -1,4 +1,5 @@
 const express = require('express');
+const { randomUUID } = require('crypto');
 const db = require('../db');
 
 const router = express.Router();
@@ -70,9 +71,9 @@ router.post('/:sourceId/confirm', (req, res) => {
   const confirm = db.transaction(() => {
     db.prepare('UPDATE transactions SET is_recurring = 0, auto_confirm = 0 WHERE id = ?').run(sourceId);
     return db.prepare(`
-      INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm)
-      VALUES (?, ?, ?, ?, '', ?, 1, ?)
-    `).run(date, source.type, source.category_id, amount, source.excluded_from_total, source.auto_confirm).lastInsertRowid;
+      INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm, uuid)
+      VALUES (?, ?, ?, ?, '', ?, 1, ?, ?)
+    `).run(date, source.type, source.category_id, amount, source.excluded_from_total, source.auto_confirm, randomUUID()).lastInsertRowid;
   });
 
   const id = confirm();

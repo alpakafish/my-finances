@@ -99,3 +99,29 @@ same known gap. And the Dashboard category-breakdown `components` field
 actual rollup happened (more than one source category), `null` on plain
 categories — backs the click-to-expand drill-down on the Dashboard; the
 click/expand interaction itself is manual-only.
+
+Also covered: partial export by date range (`GET /api/export?from=&to=`) —
+only the requested range round-trips through import, a half-supplied or
+malformed range 400s instead of silently falling back to a full export, and
+`buildWorkbook()` called with no arguments (the exact call `backup.js`
+makes) stays a full export — verified indirectly (the existing full
+export/import round-trip test still passes unchanged) rather than by
+calling `buildWorkbook()` directly, to keep the test black-box over HTTP
+like the rest of this file. Caught by this test before ever shipping: the
+first draft of the per-month summary-sheet range filter used a table alias
+(`t.date`) in a query that didn't have that alias in scope — a bug that
+never reached a real build, since the test failed immediately.
+
+Also covered: sync-aware import via a stable per-transaction `uuid` (new
+column, backfilled for pre-existing rows, exported as a hidden last column
+in the "Операции" sheet, generated fresh for every new transaction). Import
+now matches by `uuid` when present — identical values skip as before,
+different values UPDATE the existing row instead of inserting a duplicate,
+and a `uuid` present but not found locally inserts a new row that keeps the
+same `uuid` (not a fresh one) so future syncs keep recognizing it. Files
+without a `uuid` column (exported before this feature, or the legacy
+"Траты/Приход" format) fall back to the original exact-value-match dedup
+untouched. Deletions are NOT synced by this mechanism — an operation
+deleted on one device can be revived by importing an older export from
+another; this is a known, accepted limitation of a serverless "sync",
+not a bug.
