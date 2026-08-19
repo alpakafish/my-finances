@@ -288,11 +288,36 @@ td.amount-income { color: var(--color-income); }
 #txNoteField { width: 160px; }
 #txNoteField input { width: 100%; min-width: 0; }
 
+/* На вкладке «Отпускные» чекбокс «До вычета налогов» — не под конкретным
+   полем (как «Нал.»/«Повтор.» у операции, см. #txAmountField выше), а
+   отдельной строкой под всем .form-row: сначала пробовали как у операции —
+   растягивало именно колонку «Оклад», и из-за align-items: flex-end сдвигало
+   вниз подписи "Начало отпуска"/"Конец отпуска"/"Числа выплат" у соседних
+   полей (найдено по скриншоту пользователя), а сам чекбокс-под-полем через
+   position: absolute при переносе строки на узких окнах наезжал на
+   следующую строку (форма из 5 полей шире 860px — минимальной ширины окна
+   desktop-версии, значит перенос — не редкий крайний случай, а обычный). */
 .checkbox-row { display: flex; position: absolute; top: 100%; left: 0; gap: 14px; margin-top: 6px; white-space: nowrap; }
 .checkbox-field { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .checkbox-field input[type="checkbox"] { width: 13px; min-width: 0; height: 13px; margin: 0; flex-shrink: 0; }
 .checkbox-field span { font-size: 12px; color: var(--color-text-secondary); line-height: 1; white-space: nowrap; }
 .checkbox-field .info-icon { margin-left: 0; }
+/* Чекбокс-опция, зависящая от другого чекбокса (например, «Не спрашивая» —
+   только вместе с «Повтор.») — остаётся на месте и видна, но недоступна для
+   клика, а не прячется целиком: так понятно, что опция вообще есть.
+   Приглушаем только визуально (opacity) — курсор и наведение на «?» внутри
+   продолжают работать, подсказка объясняет, чем это включается. */
+/* Дизейблится только сам чекбокс и подпись — значок тултипа и тултип
+   остаются активными и не притемняются, чтобы подсказку («доступно вместе с
+   "Повтор."») можно было прочитать и когда чекбокс недоступен — это как раз
+   тот случай, когда подсказка нужнее всего. Поэтому opacity/cursor не на
+   всём .checkbox-field, а точечно на input и обычном span с текстом. */
+.checkbox-field.disabled-field input[type="checkbox"],
+.checkbox-field.disabled-field > span:not(.tooltip-wrap) {
+  opacity: 0.5;
+}
+.checkbox-field.disabled-field input[type="checkbox"] { cursor: not-allowed; }
+.checkbox-field.disabled-field > span:not(.tooltip-wrap) { cursor: not-allowed; }
 
 .insight-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .insight { padding: 10px 14px; background: var(--color-surface-alt); border-left: 3px solid var(--color-border-input); border-radius: 0 8px 8px 0; font-size: 12.5px; color: var(--color-text-secondary); line-height: 1.6; }
@@ -418,6 +443,15 @@ td.amount-income { color: var(--color-income); }
 .tooltip-wrap:last-child .tooltip-box { left: auto; right: 0; }
 .tooltip-wrap.anchor-right .tooltip-box { left: auto; right: 0; }
 .tooltip-wrap.anchor-right .tooltip-box::after { left: auto; right: 16px; }
+/* :last-child выше — эвристика "последний ребёнок в контейнере обычно
+   ближе к правому краю макета", а не проверка реальной позиции на экране —
+   ломается, когда тултип структурно последний внутри своего .checkbox-field,
+   но сам блок стоит у ЛЕВОГО края страницы (например, первое поле формы).
+   Нашли на чекбоксе «До вычета налогов» в форме отпускных — текст тултипа
+   уезжал за левый край окна. .anchor-left принудительно возвращает
+   left-анкеринг несмотря на :last-child. */
+.tooltip-wrap.anchor-left .tooltip-box { left: 0; right: auto; }
+.tooltip-wrap.anchor-left .tooltip-box::after { left: 16px; right: auto; }
 
 .info-icon-wrap { vertical-align: middle; }
 .info-icon {
@@ -462,6 +496,15 @@ td.amount-income { color: var(--color-income); }
 .btn.secondary { background: var(--color-surface); color: var(--color-text); border-color: var(--color-border-input); }
 .btn.danger { background: var(--color-surface); color: var(--color-expense); border-color: var(--color-expense); }
 .btn.small { padding: 5px 10px; font-size: 12px; }
+/* Спиннер внутри кнопки, пока идёт запрос (например, расчёт отпускных —
+   ждёт ответ от isdayoff.ru, см. setButtonLoading() в app.js) — currentColor
+   вместо жёсткого цвета, чтобы одинаково работал и на тёмной .btn, и на
+   светлой .btn.secondary/.danger. .btn-loading отменяет обычное затемнение
+   [disabled] (opacity: 0.4) — кнопка должна выглядеть «занята», а не «недоступна». */
+.btn-spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; vertical-align: -2px; animation: btn-spin 0.7s linear infinite; }
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+.btn.btn-loading { cursor: wait; }
+.btn[disabled].btn-loading { opacity: 1; }
 
 .chart-wrap { position: relative; width: 100%; }
 .two-col { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; }

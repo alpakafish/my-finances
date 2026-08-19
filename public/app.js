@@ -186,6 +186,28 @@ function toast(message, isError = false, duration = 2500, action = null, actionL
   toast._t = setTimeout(() => { el.className = 'toast'; }, action ? Math.max(duration, 8000) : duration);
 }
 
+// Спиннер вместо текста кнопки на время запроса — для действий, у которых
+// нет другого способа показать «идёт работа» (например, расчёт отпускных
+// ждёт ответ от internal API, который сам ходит наружу за производственным
+// календарём — см. routes/vacation.js — это не мгновенно). Блокирует кнопку
+// от повторного клика заодно. Общий хелпер, а не разовый код в одном месте —
+// пригодится для любой другой кнопки с сетевым запросом за собой.
+function setButtonLoading(btn, loading) {
+  if (loading) {
+    if (btn.dataset.loadingOriginalHtml === undefined) btn.dataset.loadingOriginalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.classList.add('btn-loading');
+    btn.innerHTML = '<span class="btn-spinner"></span>';
+  } else {
+    btn.disabled = false;
+    btn.classList.remove('btn-loading');
+    if (btn.dataset.loadingOriginalHtml !== undefined) {
+      btn.innerHTML = btn.dataset.loadingOriginalHtml;
+      delete btn.dataset.loadingOriginalHtml;
+    }
+  }
+}
+
 // ---------- Корзина удалённых операций (public/../db.js: deleted_transactions) ----------
 // Раньше отмена удаления жила только в памяти вкладки и работала только для
 // самого последнего удаления, сбрасываясь при любом другом действии (см. git
@@ -477,12 +499,20 @@ document.getElementById('txTypeToggle').addEventListener('click', (e) => {
   renderTxCategoryOptions();
 });
 
-// «Не спрашивая» имеет смысл только вместе с «Повтор.» — поле спрятано, пока
-// «Повтор.» не отмечено, и снимается вместе с ним, а не остаётся висеть
-// отмеченным-но-невидимым.
+// «Не спрашивая» имеет смысл только вместе с «Повтор.» — не прячем целиком
+// (тогда непонятно, что опция вообще есть), а дизейблим и приглушаем: сама
+// строка остаётся на месте и видна, чекбокс недоступен для клика, пока
+// «Повтор.» не отмечено, а подсказка по «?» продолжает работать в любом
+// состоянии (opacity не блокирует наведение, в отличие от hidden) и
+// объясняет, чем это активируется.
+function setAutoConfirmAvailable(checkbox, label, available) {
+  checkbox.disabled = !available;
+  label.classList.toggle('disabled-field', !available);
+  if (!available) checkbox.checked = false;
+}
+
 document.getElementById('txRecurring').addEventListener('change', (e) => {
-  document.getElementById('txAutoConfirmField').hidden = !e.target.checked;
-  if (!e.target.checked) document.getElementById('txAutoConfirm').checked = false;
+  setAutoConfirmAvailable(document.getElementById('txAutoConfirm'), document.getElementById('txAutoConfirmField'), e.target.checked);
 });
 
 // ---------- Add transaction ----------
@@ -507,8 +537,7 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
     document.getElementById('txNote').value = '';
     excludedCheckbox.checked = false;
     recurringCheckbox.checked = false;
-    autoConfirmCheckbox.checked = false;
-    document.getElementById('txAutoConfirmField').hidden = true;
+    setAutoConfirmAvailable(autoConfirmCheckbox, document.getElementById('txAutoConfirmField'), false);
     toast('Операция добавлена');
     await loadTransactionsTable();
     refreshDashboard();
@@ -741,8 +770,8 @@ function renderTxEditRow(tx) {
       <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;">
         <input type="checkbox" class="edit-recurring" ${tx.is_recurring ? 'checked' : ''}> повторять каждый месяц
       </label>
-      <label class="edit-auto-confirm-label" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;" ${tx.is_recurring ? '' : 'hidden'}>
-        <input type="checkbox" class="edit-auto-confirm" ${tx.auto_confirm ? 'checked' : ''}> добавлять не спрашивая
+      <label class="edit-auto-confirm-label${tx.is_recurring ? '' : ' disabled-field'}" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;">
+        <input type="checkbox" class="edit-auto-confirm" ${tx.auto_confirm ? 'checked' : ''} ${tx.is_recurring ? '' : 'disabled'}> добавлять не спрашивая
       </label>
     </td>
     <td class="row-actions">
@@ -756,8 +785,7 @@ function renderTxEditRow(tx) {
   });
 
   row.querySelector('.edit-recurring').addEventListener('change', (e) => {
-    row.querySelector('.edit-auto-confirm-label').hidden = !e.target.checked;
-    if (!e.target.checked) row.querySelector('.edit-auto-confirm').checked = false;
+    setAutoConfirmAvailable(row.querySelector('.edit-auto-confirm'), row.querySelector('.edit-auto-confirm-label'), e.target.checked);
   });
 
   row.querySelector('[data-role="cancel-edit"]').addEventListener('click', () => loadTransactionsTable());
@@ -1692,6 +1720,66 @@ async function loadYearsTab() {
   await Promise.all([loadYearSingleChart(), loadYearsCompareChart(), loadYearsTotals(), loadYearlyLimitsProgress()]);
 }
 
+// ---------- Vacation pay (отпускные, ТК РФ) ----------
+// Расчёт полностью в routes/vacation.js — здесь только сбор формы и рендер.
+// Единственная фича в приложении, которая обращается наружу (isdayoff.ru,
+// открытый производственный календарь) — см. README «Безопасность».
+function vacationRow(label, sub, amount) {
+  return `
+    <div class="recon-row">
+      <div class="rl">${escapeHtml(label)}<small>${escapeHtml(sub)}</small></div>
+      <div class="rv">${fmt(amount, { kopecks: true })}</div>
+    </div>
+  `;
+}
+
+function renderVacationResult(result) {
+  const card = document.getElementById('vacationResultCard');
+  card.hidden = false;
+
+  const vp = result.vacationPay;
+  const daysSub = vp.holidaysExcluded
+    ? `${vp.paidDays} дн. из ${vp.totalDays} — ${vp.holidaysExcluded} праздничных не оплачивается`
+    : `${vp.paidDays} дн.`;
+  const rows = [
+    vacationRow(`${formatDateRu(vp.date)} — отпускные`, daysSub, vp.amount),
+    ...result.payments.map((p) => vacationRow(
+      `${formatDateRu(p.date)} — выплата ${p.day}-го числа`,
+      `отработано ${p.workedDays} из ${p.workingDaysInPeriod} раб. дней периода`,
+      p.amount
+    )),
+  ];
+  document.getElementById('vacationResultRows').innerHTML = rows.join('');
+
+  const warning = document.getElementById('vacationCalendarWarning');
+  if (!result.calendarAvailable) {
+    warning.style.display = 'block';
+    warning.textContent = 'Не удалось проверить производственный календарь (нет связи с isdayoff.ru) — праздники не учтены, только обычные выходные по дням недели.';
+  } else {
+    warning.style.display = 'none';
+  }
+}
+
+document.getElementById('vacationForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = {
+    salary: Number(document.getElementById('vacationSalary').value),
+    salaryIsGross: document.getElementById('vacationSalaryGross').checked,
+    vacationStart: document.getElementById('vacationStart').value,
+    vacationEnd: document.getElementById('vacationEnd').value,
+    payday1: Number(document.getElementById('vacationPayday1').value),
+    payday2: Number(document.getElementById('vacationPayday2').value),
+  };
+  const submitBtn = document.getElementById('vacationSubmitBtn');
+  setButtonLoading(submitBtn, true);
+  try {
+    const result = await api('/api/vacation/calculate', { method: 'POST', body: JSON.stringify(payload) });
+    renderVacationResult(result);
+  } catch (err) { toast(err.message, true); } finally {
+    setButtonLoading(submitBtn, false);
+  }
+});
+
 // ---------- Settings ----------
 document.getElementById('deleteAllDataBtn').addEventListener('click', () => {
   showConfirmModal({
@@ -1975,6 +2063,13 @@ const TOUR_STEPS = [
     selector: '#yearsCompareChips',
     title: 'По годам — сравнение',
     text: 'Отметьте любые годы — например, этот и позапрошлый, — чтобы сравнить их месяц к месяцу на одном графике.',
+  },
+  // ---------- Отпускные ----------
+  {
+    tab: 'vacation',
+    selector: '#vacationFormCard',
+    title: 'Расчёт отпускных',
+    text: 'Только по ТК РФ, упрощённо (по окладу, не по среднему за 12 месяцев). Укажите оклад, даты отпуска (включительно) и числа выплат в месяце — увидите, сколько получите за 3 дня до отпуска, и сколько придёт в обе ближайшие выплаты с учётом отпуска. Праздники и переносы выходных проверяются через открытый производственный календарь (isdayoff.ru) — уходят только даты, без ваших сумм.',
   },
   // ---------- Настройки ----------
   {

@@ -1168,3 +1168,198 @@ test('card reconciliation: unset by default, month-before-anchor hides the card 
     removeDataDir(dir);
   }
 });
+
+// ---------- Vacation pay (routes/vacation.js) ----------
+// calculateVacation() is a pure function (no network, no db — the only route
+// in this app with zero persisted state), so these run against hand-built
+// calendar fixtures instead of the real isdayoff.ru — fast and deterministic,
+// no flakiness from an external service being briefly unavailable during CI.
+const { calculateVacation, calendarFetchRange, parseCalendarResponse } = require('../routes/vacation');
+
+function addDaysFixture(dateStr, n) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// Builds a calendar covering [from, to]: weekends ('1'), named holidays ('8'),
+// everything else a working day ('0') — same shape routes/vacation.js's
+// fetchCalendar()/fallbackCalendar() produce from the real API.
+function buildCalendarFixture(from, to, holidays = []) {
+  const calendar = {};
+  let d = from;
+  while (d <= to) {
+    const dow = new Date(`${d}T00:00:00`).getDay();
+    calendar[d] = holidays.includes(d) ? '8' : (dow === 0 || dow === 6) ? '1' : '0';
+    d = addDaysFixture(d, 1);
+  }
+  return calendar;
+}
+
+test('vacation pay: matches the worked example (Sept 1-14 2026, oklad 100k, paydays 5/20) — including two payment dates the writer\'s own by-hand trace initially missed were on weekends', () => {
+  const calendar = buildCalendarFixture('2026-07-01', '2026-09-20');
+  const result = calculateVacation({
+    salary: 100000, salaryIsGross: false, vacationStart: '2026-09-01', vacationEnd: '2026-09-14', payday1: 5, payday2: 20,
+  }, calendar);
+
+  assert.equal(result.netSalary, 100000);
+  assert.equal(result.vacationPay.date, '2026-08-28', 'Aug 29 is a Saturday — rolled back to Friday the 28th, not paid late');
+  assert.equal(result.vacationPay.totalDays, 14);
+  assert.equal(result.vacationPay.paidDays, 14, 'no public holidays fall in this range, only ordinary weekends, which stay paid');
+  assert.equal(result.vacationPay.holidaysExcluded, 0);
+  assert.ok(Math.abs(result.vacationPay.amount - (100000 / 29.3) * 14) < 0.001);
+
+  const p5 = result.payments.find((p) => p.day === 5);
+  assert.equal(p5.date, '2026-09-04', 'the 5th is a Saturday — rolled back to Friday the 4th');
+  assert.equal(p5.period.from, '2026-08-16');
+  assert.equal(p5.period.to, '2026-08-31');
+  assert.equal(p5.workingDaysInPeriod, 11);
+  assert.equal(p5.workedDays, 11, 'this whole period is before the vacation starts, fully worked');
+  assert.equal(p5.amount, 50000);
+
+  const p20 = result.payments.find((p) => p.day === 20);
+  assert.equal(p20.date, '2026-09-18', 'the 20th is a Sunday — rolled back to Friday the 18th');
+  assert.equal(p20.period.from, '2026-09-01');
+  assert.equal(p20.period.to, '2026-09-15');
+  assert.equal(p20.workingDaysInPeriod, 11);
+  assert.equal(p20.workedDays, 1, 'only the 15th (the day after vacation ends) was actually worked in this half-month');
+  assert.ok(Math.abs(p20.amount - (100000 / 2) * (1 / 11)) < 0.001);
+
+  assert.deepEqual(result.payments.map((p) => p.date), ['2026-09-04', '2026-09-18'], 'sorted chronologically');
+});
+
+test('vacation pay: a public holiday inside the range is excluded from paid days (weekends are not); gross salary is converted at 0.87', () => {
+  const calendar = buildCalendarFixture('2026-03-01', '2026-05-20', ['2026-05-01']);
+  const result = calculateVacation({
+    salary: 100000, salaryIsGross: true, vacationStart: '2026-04-28', vacationEnd: '2026-05-05', payday1: 5, payday2: 20,
+  }, calendar);
+
+  assert.equal(result.netSalary, 87000);
+  assert.equal(result.vacationPay.totalDays, 8);
+  assert.equal(result.vacationPay.holidaysExcluded, 1, 'May 1st (Праздник Весны и Труда) does not count as a paid vacation day');
+  assert.equal(result.vacationPay.paidDays, 7);
+  assert.equal(result.vacationPay.date, '2026-04-24', 'raw due date (Apr 25) is a Saturday — rolled back to Friday the 24th');
+});
+
+test('vacation pay: a payment period entirely consumed by vacation pays close to nothing; payday clamps to the real end of a shorter month', () => {
+  // A short, one-week vacation that fully covers the 1-15 half of its month —
+  // that half's payment should be ~0 (every working day in it was vacation).
+  const calendar = buildCalendarFixture('2026-01-20', '2026-02-20', []);
+  const result = calculateVacation({
+    salary: 60000, salaryIsGross: false, vacationStart: '2026-02-02', vacationEnd: '2026-02-13', payday1: 20, payday2: 5,
+  }, calendar);
+  const feb20 = result.payments.find((p) => p.day === 20);
+  assert.equal(feb20.workedDays, 0, 'every working day of Feb 1-15 falls inside the vacation');
+  assert.equal(feb20.amount, 0);
+
+  // payday=31 for a vacation starting well into February (28 days in 2026,
+  // not a leap year) — the *next* occurrence of "the 31st" on or after the
+  // отпускные payment date (itself in February) must clamp to the 28th, not
+  // silently roll into March or produce an invalid date — same clamp
+  // routes/recurring.js already uses for recurring transactions' day-of-month.
+  const clampCalendar = buildCalendarFixture('2026-01-01', '2026-03-05', []);
+  const clamped = calculateVacation({
+    salary: 60000, salaryIsGross: false, vacationStart: '2026-02-24', vacationEnd: '2026-02-26', payday1: 31, payday2: 5,
+  }, clampCalendar);
+  const clampedPayment = clamped.payments.find((p) => p.day === 31);
+  // <= the 28th, not necessarily == it: Feb 28 2026 is itself a Saturday, so
+  // the usual "не позднее" weekend roll-back (see rollBackToWorkingDay)
+  // correctly moves it one day earlier still — the clamp and the roll-back
+  // compose, this test only cares that neither rolled it into March.
+  assert.ok(clampedPayment.date <= '2026-02-28' && clampedPayment.date.startsWith('2026-02'), 'payday 31 clamped into February, not rolled into March');
+});
+
+test('vacation pay: each payment is the NEXT occurrence of its payday on or after отпускные is paid — not just "same payday number, vacation-start month", which can pick an already-past date', () => {
+  // Отпускные paid Oct 16 (3 days before Oct 19, no weekend adjustment
+  // needed that year). October's own "5th" is Oct 5 — already in the past
+  // relative to Oct 16 — so the correct next occurrence is Nov 5, not Oct 5.
+  // Found by the user testing the real app: the first version of this logic
+  // always resolved both paydays within the vacation-start month regardless
+  // of whether that occurrence had already passed.
+  const calendar = buildCalendarFixture('2026-09-01', '2026-11-30');
+  const result = calculateVacation({
+    salary: 175000, salaryIsGross: false, vacationStart: '2026-10-19', vacationEnd: '2026-11-01', payday1: 5, payday2: 20,
+  }, calendar);
+
+  assert.equal(result.vacationPay.date, '2026-10-16');
+  assert.deepEqual(result.payments.map((p) => `${p.day}:${p.date}`), ['20:2026-10-20', '5:2026-11-05']);
+});
+
+test('vacation pay: calendarFetchRange fetches far enough ahead to cover a payday that nextPaydayOnOrAfter pushes into a later month — found via a live repro (2027-01-01 to 2027-01-01, paydays 10/20) where the old +5-day bound silently collapsed both payments onto the same wrong date', () => {
+  // Short vacation right at the start of a month, both paydays still ahead —
+  // отпускные itself is paid ~3 days before vacationStart, so the fetch
+  // window used to end just a few days into January, well before the 10th
+  // or 20th ever needed by nextPaydayOnOrAfter()/periodForPayday() below.
+  const { to } = calendarFetchRange('2027-01-01', '2027-01-01');
+  assert.ok(to >= '2027-01-20', `fetch range must reach at least the later payday (2027-01-20), got ${to}`);
+
+  // General shape of the guarantee, not just this one example: the range
+  // must reach at least a month past vacationEnd, since periodForPayday()
+  // for a payday resolved into the month after vacationEnd can itself need
+  // dates up to the 15th of the month after THAT.
+  const wide = calendarFetchRange('2026-06-15', '2026-06-20');
+  assert.ok(wide.to >= '2026-08-01', `fetch range must reach well past vacationEnd, got ${wide.to}`);
+});
+
+test('vacation pay: parseCalendarResponse rejects a response whose length does not match the requested range, instead of silently accepting isdayoff.ru\'s short numeric error codes (e.g. "100"/"101"/"199") as if they were real day-by-day data', () => {
+  assert.throws(() => parseCalendarResponse('100', '2027-01-01', '2027-01-20'), /unexpected isdayoff\.ru response/, 'a 3-digit error code must not be accepted for a 20-day range');
+  assert.throws(() => parseCalendarResponse('', '2027-01-01', '2027-01-05'), /unexpected isdayoff\.ru response/, 'empty response must not be accepted');
+  assert.throws(() => parseCalendarResponse('abc', '2027-01-01', '2027-01-03'), /unexpected isdayoff\.ru response/, 'non-numeric response must not be accepted');
+
+  const calendar = parseCalendarResponse('00110', '2027-01-01', '2027-01-05');
+  assert.deepEqual(calendar, {
+    '2027-01-01': '0', '2027-01-02': '0', '2027-01-03': '1', '2027-01-04': '1', '2027-01-05': '0',
+  }, 'a correctly-sized response must still parse into a full per-day calendar');
+});
+
+test('vacation pay: end-to-end reproduction of the calendarFetchRange bug through calculateVacation — a too-narrow fetch window used to make both paydays collapse onto the same wrong (too-early) date', () => {
+  // Real isdayoff.ru data (verified live against the actual API during
+  // triage) marks Jan 8-11 2027 as working days — all-working here, rather
+  // than buildCalendarFixture's plain day-of-week rule, to isolate exactly
+  // the "fetch range too narrow" bug instead of mixing in unrelated weekend
+  // logic. With the old +5-day bound, calendar['2027-01-10'] and
+  // calendar['2027-01-20'] were both undefined (outside the fetched range),
+  // isWorkingDay() treated that as "not a working day", and
+  // rollBackToWorkingDay() walked backward until it hit an in-range date,
+  // producing two identical, wrong payment dates.
+  const { from, to } = calendarFetchRange('2027-01-01', '2027-01-01');
+  const calendar = {};
+  let d = from;
+  while (d <= to) {
+    calendar[d] = '0'; // everything a working day — isolates the range bug alone
+    d = addDaysFixture(d, 1);
+  }
+  const result = calculateVacation({
+    salary: 100000, salaryIsGross: false, vacationStart: '2027-01-01', vacationEnd: '2027-01-01', payday1: 10, payday2: 20,
+  }, calendar);
+  assert.deepEqual(result.payments.map((p) => `${p.day}:${p.date}`), ['10:2027-01-10', '20:2027-01-20']);
+});
+
+test('vacation pay: input validation, and one real end-to-end call against isdayoff.ru through the actual route (network-dependent — the only test in this file that is; everything else above is offline against a hand-built calendar)', async () => {
+  const badSalaryRes = await fetch(`${baseUrl}/api/vacation/calculate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ salary: 0, vacationStart: '2026-09-01', vacationEnd: '2026-09-14', payday1: 5, payday2: 20 }),
+  });
+  assert.equal(badSalaryRes.status, 400);
+
+  const badDatesRes = await fetch(`${baseUrl}/api/vacation/calculate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ salary: 100000, vacationStart: '2026-09-14', vacationEnd: '2026-09-01', payday1: 5, payday2: 20 }),
+  });
+  assert.equal(badDatesRes.status, 400, 'end before start must be rejected');
+
+  const badPaydayRes = await fetch(`${baseUrl}/api/vacation/calculate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ salary: 100000, vacationStart: '2026-09-01', vacationEnd: '2026-09-14', payday1: 32, payday2: 20 }),
+  });
+  assert.equal(badPaydayRes.status, 400);
+
+  const okRes = await fetch(`${baseUrl}/api/vacation/calculate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ salary: 100000, salaryIsGross: false, vacationStart: '2026-09-01', vacationEnd: '2026-09-14', payday1: 5, payday2: 20 }),
+  });
+  assert.equal(okRes.status, 200);
+  const body = await okRes.json();
+  assert.equal(body.calendarAvailable, true, 'isdayoff.ru should be reachable in CI; if this starts flaking, the service itself is down, not the code');
+  assert.equal(body.vacationPay.date, '2026-08-28');
+  assert.equal(body.vacationPay.amount, body.netSalary / 29.3 * body.vacationPay.paidDays);
+});
