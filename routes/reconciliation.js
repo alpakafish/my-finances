@@ -84,6 +84,16 @@ router.get('/:month', (req, res) => {
   const anchor = getAnchor();
   if (!anchor) return res.json({ set: false });
 
+  // Месяц раньше месяца точки отсчёта — «накопительный остаток с X» не имеет
+  // смысла для периода до X. Без этой проверки date >= anchor_date AND date <
+  // конец_запрошенного_месяца получался перевёрнутым диапазоном (нижняя
+  // граница позже верхней), молча находил 0 строк и отдавал since_net=0 —
+  // выглядело так, будто с точки отсчёта вообще ничего не происходило, хотя
+  // на самом деле вопрос просто не про этот период. Сравнение строк работает
+  // корректно для формата YYYY-MM (тот же порядок, что и хронологический).
+  const anchorMonth = anchor.anchor_date.slice(0, 7);
+  if (month < anchorMonth) return res.json({ set: false });
+
   const upperBound = firstDayOfNextMonth(month);
   const netRow = db.prepare(`
     SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0) AS net

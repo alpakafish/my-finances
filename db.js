@@ -229,10 +229,15 @@ db.resetAllData = db.transaction(() => {
   db.exec('DELETE FROM overall_budget_notification_dismissals');
   db.exec('DELETE FROM deleted_transactions');
   // В отличие от currency/onboarding_seen (настройки приложения, resetAllData
-  // их не трогает) — общий бюджет это финансовое планирование, того же рода,
-  // что monthly_limit у категорий (который стирается вместе с DELETE FROM
-  // categories выше), поэтому и его тоже сбрасываем.
-  db.exec("DELETE FROM app_settings WHERE key = 'overall_monthly_budget'");
+  // их не трогает) — общий бюджет и точка отсчёта сверки с картой это
+  // финансовое планирование, того же рода, что monthly_limit у категорий
+  // (который стирается вместе с DELETE FROM categories выше), поэтому их
+  // тоже сбрасываем. Точку отсчёта — по той же причине ещё и потому, что она
+  // ссылается на остаток, накопленный по операциям, которых после сброса
+  // больше не существует: оставить её значило бы показывать на пустом
+  // Дашборде карточку сверки, посчитанную по несуществующим данным (найдено
+  // и исправлено вскоре после того, как сама фича появилась).
+  db.exec("DELETE FROM app_settings WHERE key IN ('overall_monthly_budget', 'reconciliation_anchor_date', 'reconciliation_anchor_amount')");
   insertDefaultCategories();
 });
 

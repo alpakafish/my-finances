@@ -918,3 +918,51 @@ test('trash (deleted-transactions): keeps last 10 with oldest trimmed, restore r
     removeDataDir(dir);
   }
 });
+
+test('card reconciliation: unset by default, month-before-anchor hides the card instead of an inverted-range false zero, wiped by delete-all-data', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-reconciliation-'));
+  const { proc, baseUrl: reconBaseUrl } = await startServer(dir);
+  try {
+    const initial = await (await fetch(`${reconBaseUrl}/api/reconciliation`)).json();
+    assert.equal(initial.anchor_date, null);
+
+    const badRes = await fetch(`${reconBaseUrl}/api/reconciliation`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anchor_date: 'not-a-date', anchor_amount: 100 }),
+    });
+    assert.equal(badRes.status, 400);
+
+    const setRes = await fetch(`${reconBaseUrl}/api/reconciliation`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anchor_date: '2026-08-15', anchor_amount: 1000 }),
+    });
+    assert.equal(setRes.status, 200);
+
+    const categories = await (await fetch(`${reconBaseUrl}/api/categories`)).json();
+    const food = categories.find((c) => c.name === 'Еда');
+    // A transaction BEFORE the anchor date — this is what exposed the
+    // inverted-range bug: querying a month earlier than the anchor's month
+    // used to silently return since_net=0 (0 matching rows) instead of
+    // recognizing the question doesn't apply to that period.
+    await fetch(`${reconBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: '2026-07-10', type: 'expense', category_id: food.id, amount: 5000, note: '' }),
+    });
+
+    const beforeAnchor = await (await fetch(`${reconBaseUrl}/api/reconciliation/2026-07`)).json();
+    assert.equal(beforeAnchor.set, false, 'a month before the anchor\'s month must hide the card, not show a misleading since_net=0');
+
+    const anchorMonthRes = await (await fetch(`${reconBaseUrl}/api/reconciliation/2026-08`)).json();
+    assert.equal(anchorMonthRes.set, true);
+    assert.equal(anchorMonthRes.since_net, 0, 'the July transaction is before anchor_date, so it must not count toward August either');
+    assert.equal(anchorMonthRes.expected, 1000);
+
+    // "Удалить все данные" — the anchor references a balance built from
+    // transactions that no longer exist after a wipe, so it must be cleared
+    // too (same reasoning already applied to overall_monthly_budget).
+    await fetch(`${reconBaseUrl}/api/settings/all-data`, { method: 'DELETE' });
+    const afterWipe = await (await fetch(`${reconBaseUrl}/api/reconciliation`)).json();
+    assert.equal(afterWipe.anchor_date, null);
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});
