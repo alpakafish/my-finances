@@ -86,3 +86,16 @@ against whatever is currently in the trash (instead of the old
 single-slot "invalidated by any other action" undo), the toast's
 "Отменить"/"Открыть бэкапы" action button, and the «Корзина» card's
 restore buttons — is manual-only, same known gap as above.
+
+Also covered: `auto_confirm` ("не спрашивая") on recurring templates —
+carries forward through `confirm` (otherwise it would silently revert to
+manual after one month), appears on `GET /suggestions`, clears itself if
+`is_recurring` is turned off via `PUT`, and round-trips through the trash
+delete/restore cycle same as `is_recurring` already did. The frontend half —
+`loadRecurringSuggestions()` auto-firing `confirm` for these instead of
+rendering a card, and the toast summarizing what got added — is manual-only,
+same known gap. And the Dashboard category-breakdown `components` field
+(`routes/summary.js` `categoryBreakdown()`) — present only on rows where an
+actual rollup happened (more than one source category), `null` on plain
+categories — backs the click-to-expand drill-down on the Dashboard; the
+click/expand interaction itself is manual-only.

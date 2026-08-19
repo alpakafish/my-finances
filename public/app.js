@@ -105,6 +105,10 @@ const INSIGHT_RATIO = 1.5;
 function monthKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 function monthLabel(key) {
   const [y, m] = key.split('-').map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
@@ -473,11 +477,20 @@ document.getElementById('txTypeToggle').addEventListener('click', (e) => {
   renderTxCategoryOptions();
 });
 
+// «Не спрашивая» имеет смысл только вместе с «Повтор.» — поле спрятано, пока
+// «Повтор.» не отмечено, и снимается вместе с ним, а не остаётся висеть
+// отмеченным-но-невидимым.
+document.getElementById('txRecurring').addEventListener('change', (e) => {
+  document.getElementById('txAutoConfirmField').hidden = !e.target.checked;
+  if (!e.target.checked) document.getElementById('txAutoConfirm').checked = false;
+});
+
 // ---------- Add transaction ----------
 document.getElementById('txForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const excludedCheckbox = document.getElementById('txExcludedFromTotal');
   const recurringCheckbox = document.getElementById('txRecurring');
+  const autoConfirmCheckbox = document.getElementById('txAutoConfirm');
   const payload = {
     type: txType,
     date: document.getElementById('txDate').value,
@@ -486,6 +499,7 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
     note: document.getElementById('txNote').value,
     excluded_from_total: excludedCheckbox.checked,
     is_recurring: recurringCheckbox.checked,
+    auto_confirm: autoConfirmCheckbox.checked,
   };
   try {
     await api('/api/transactions', { method: 'POST', body: JSON.stringify(payload) });
@@ -493,6 +507,8 @@ document.getElementById('txForm').addEventListener('submit', async (e) => {
     document.getElementById('txNote').value = '';
     excludedCheckbox.checked = false;
     recurringCheckbox.checked = false;
+    autoConfirmCheckbox.checked = false;
+    document.getElementById('txAutoConfirmField').hidden = true;
     toast('Операция добавлена');
     await loadTransactionsTable();
     refreshDashboard();
@@ -536,13 +552,30 @@ document.getElementById('txSearchClear').addEventListener('click', () => {
 
 // ---------- Recurring transaction suggestions ----------
 // Карточки над списком операций: «Зарплата — повторяется, добавить за этот
-// месяц?» — см. чекбокс «Повтор.» в форме выше и routes/recurring.js.
+// месяц?» — см. чекбокс «Повтор.» в форме выше и routes/recurring.js. Шаблоны
+// с «не спрашивая» (auto_confirm) сюда карточкой не попадают вообще — тихо
+// подтверждаются САМИ, той же суммой, что в прошлый раз, до того как
+// отрисуется список: пользователь просто видит уже добавленную операцию.
 async function loadRecurringSuggestions(month) {
   const container = document.getElementById('recurringSuggestions');
   const suggestions = await api(`/api/recurring/suggestions?month=${month}`);
-  if (!suggestions.length) { container.innerHTML = ''; return; }
 
-  container.innerHTML = suggestions.map((s) => `
+  const autoOnes = suggestions.filter((s) => s.auto_confirm);
+  const manualOnes = suggestions.filter((s) => !s.auto_confirm);
+
+  if (autoOnes.length) {
+    const results = await Promise.allSettled(autoOnes.map((s) => api(`/api/recurring/${s.source_id}/confirm`, {
+      method: 'POST', body: JSON.stringify({ month, amount: s.amount }),
+    })));
+    const added = autoOnes.filter((_, i) => results[i].status === 'fulfilled');
+    const failed = autoOnes.filter((_, i) => results[i].status === 'rejected');
+    if (added.length) toast(`Добавлено автоматически: ${added.map((s) => s.category_name).join(', ')}`);
+    if (failed.length) toast(`Не удалось автоматически добавить: ${failed.map((s) => s.category_name).join(', ')}`, true);
+  }
+
+  if (!manualOnes.length) { container.innerHTML = ''; return; }
+
+  container.innerHTML = manualOnes.map((s) => `
     <div class="recurring-suggestion" data-source-id="${s.source_id}">
       <span class="recurring-icon">↻</span>
       <div class="recurring-suggestion-text">
@@ -609,18 +642,16 @@ async function loadTransactionsTable() {
   document.getElementById('txListTitle').textContent = title;
 
   // Подсказки про повторяющиеся операции — про конкретный месяц, без него
-  // (поиск или «Все время») не имеют смысла, просто прячем.
-  const suggestionsPromise = showAllTime
-    ? Promise.resolve(document.getElementById('recurringSuggestions').innerHTML = '')
-    : loadRecurringSuggestions(selectedMonth);
+  // (поиск или «Все время») не имеют смысла, просто прячем. Дожидаемся ДО
+  // запроса списка операций ниже (не Promise.all параллельно, как раньше) —
+  // шаблоны с «не спрашивая» добавляют операцию сами внутри
+  // loadRecurringSuggestions, и если бы список операций запрашивался
+  // одновременно, только что автодобавленная операция могла не попасть в
+  // этот же рендер, показавшись только после следующей перезагрузки.
+  if (showAllTime) document.getElementById('recurringSuggestions').innerHTML = '';
+  else await loadRecurringSuggestions(selectedMonth);
 
-  // Подсказки грузятся параллельно и до early-return ниже (rows.length === 0) —
-  // это как раз самый частый случай, когда они нужны: только что открытый
-  // месяц, где ещё вообще ничего не внесено.
-  const [allRows] = await Promise.all([
-    api(`/api/transactions?${params.toString()}`),
-    suggestionsPromise,
-  ]);
+  const allRows = await api(`/api/transactions?${params.toString()}`);
 
   // Регистронезависимо и корректно для кириллицы (SQL LIKE — только для ASCII
   // без ICU-расширения, которого в node:sqlite нет) — поэтому фильтруем в JS,
@@ -710,6 +741,9 @@ function renderTxEditRow(tx) {
       <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;">
         <input type="checkbox" class="edit-recurring" ${tx.is_recurring ? 'checked' : ''}> повторять каждый месяц
       </label>
+      <label class="edit-auto-confirm-label" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--color-text-tertiary); margin-top:4px; cursor:pointer; white-space:nowrap;" ${tx.is_recurring ? '' : 'hidden'}>
+        <input type="checkbox" class="edit-auto-confirm" ${tx.auto_confirm ? 'checked' : ''}> добавлять не спрашивая
+      </label>
     </td>
     <td class="row-actions">
       <button data-role="save-edit" title="Сохранить">✓</button>
@@ -719,6 +753,11 @@ function renderTxEditRow(tx) {
 
   row.querySelector('.edit-type').addEventListener('change', (e) => {
     row.querySelector('.edit-category').innerHTML = categoryOptionsHtml(e.target.value, null);
+  });
+
+  row.querySelector('.edit-recurring').addEventListener('change', (e) => {
+    row.querySelector('.edit-auto-confirm-label').hidden = !e.target.checked;
+    if (!e.target.checked) row.querySelector('.edit-auto-confirm').checked = false;
   });
 
   row.querySelector('[data-role="cancel-edit"]').addEventListener('click', () => loadTransactionsTable());
@@ -732,6 +771,7 @@ function renderTxEditRow(tx) {
       note: row.querySelector('.edit-note').value,
       excluded_from_total: row.querySelector('.edit-excluded').checked,
       is_recurring: row.querySelector('.edit-recurring').checked,
+      auto_confirm: row.querySelector('.edit-auto-confirm').checked,
     };
     if (!payload.date || !payload.category_id || !(payload.amount > 0)) {
       toast('Заполните дату, категорию и сумму (> 0)', true);
@@ -793,14 +833,35 @@ async function loadDashboardMonth() {
     list.innerHTML = '<div class="empty-hint">Нет расходов за этот месяц</div>';
   } else {
     list.innerHTML = data.expenseByCategory.map((c) => `
-      <div class="cat-row">
+      <div class="cat-row${c.components ? ' cat-row-expandable' : ''}">
         <div class="cat-dot" style="background:${escapeHtml(c.color || CAT_COLORS_FALLBACK)}"></div>
-        <div class="cat-name">${escapeHtml(c.name)}</div>
+        <div class="cat-name">${escapeHtml(c.name)}${c.components ? ' <span class="cat-expand-chevron">▸</span>' : ''}</div>
         <div class="cat-bar-wrap"><div class="cat-bar" style="width:${c.pct}%; background:${escapeHtml(c.color || CAT_COLORS_FALLBACK)}"></div></div>
         <div class="cat-pct">${c.pct}%</div>
         <div class="cat-val">${fmt(c.amount)}</div>
       </div>
+      ${c.components ? `<div class="cat-breakdown" hidden>${c.components.map((comp) => `
+        <div class="cat-breakdown-row">
+          <span class="cat-breakdown-name">${escapeHtml(comp.name)}</span>
+          <span class="cat-breakdown-val">${fmt(comp.amount)}</span>
+        </div>
+      `).join('')}</div>` : ''}
     `).join('');
+
+    // Клик по строке со свёрнутой rollup-суммой (например «Сбережения», куда
+    // подшита отдельная категория цели) разворачивает разбивку — сколько из
+    // показанной суммы сама категория, а сколько каждая подшитая цель. Без
+    // этого узнать долю можно было только вручную фильтруя «Операции» по
+    // каждой категории по отдельности.
+    list.querySelectorAll('.cat-row-expandable').forEach((row) => {
+      row.addEventListener('click', () => {
+        const breakdown = row.nextElementSibling;
+        const chevron = row.querySelector('.cat-expand-chevron');
+        const willShow = breakdown.hidden;
+        breakdown.hidden = !willShow;
+        if (chevron) chevron.textContent = willShow ? '▾' : '▸';
+      });
+    });
   }
 
   if (pieChart) pieChart.destroy();
@@ -1079,13 +1140,18 @@ function renderReconciliationRows(data) {
 // Сравнение «Фактически на карте» ничего не сохраняет на бэкенде — это разовая
 // сверка в моменте, введённое число нужно только чтобы посчитать и показать
 // расхождение прямо сейчас (см. концепт, обсуждённый перед реализацией).
+// Кнопка «Обновить точку отсчёта» показывается, как только введено число —
+// и на «Сходится», и на расхождении: во втором случае перенос анкора на
+// сегодня с введённым фактическим числом «принимает» реальность картой как
+// новую базу, не гоняясь за причиной разницы задним числом.
 function updateReconciliationMatch(expected) {
   const input = document.getElementById('reconciliationActualInput');
   const pill = document.getElementById('reconciliationMatchPill');
+  const rebaseBtn = document.getElementById('reconciliationRebaseBtn');
   const raw = input.value;
-  if (raw === '') { pill.innerHTML = ''; return; }
+  if (raw === '') { pill.innerHTML = ''; rebaseBtn.hidden = true; return; }
   const actual = Number(raw);
-  if (Number.isNaN(actual)) { pill.innerHTML = ''; return; }
+  if (Number.isNaN(actual)) { pill.innerHTML = ''; rebaseBtn.hidden = true; return; }
   const diff = actual - expected;
   if (Math.round(Math.abs(diff)) === 0) {
     pill.innerHTML = '<div class="match-pill ok">✓ Сходится</div>';
@@ -1093,7 +1159,22 @@ function updateReconciliationMatch(expected) {
     const sign = diff > 0 ? '+' : '';
     pill.innerHTML = `<div class="match-pill mismatch">Расхождение: ${sign}${fmt(diff)}</div>`;
   }
+  rebaseBtn.hidden = false;
 }
+
+document.getElementById('reconciliationRebaseBtn').addEventListener('click', async () => {
+  const actual = Number(document.getElementById('reconciliationActualInput').value);
+  if (!Number.isFinite(actual)) return;
+  try {
+    await api('/api/reconciliation', {
+      method: 'PUT',
+      body: JSON.stringify({ anchor_date: todayISO(), anchor_amount: actual }),
+    });
+    toast('Точка отсчёта обновлена на сегодня');
+    document.getElementById('reconciliationActualInput').value = '';
+    await refreshDashboard();
+  } catch (e) { toast(e.message, true); }
+});
 
 // Следует за выбранным на Дашборде месяцем (currentMonth), как и «Лимиты за
 // месяц» выше — карточка вообще не рендерится, пока в Настройках не задана
@@ -1105,6 +1186,11 @@ async function loadReconciliationCard() {
   if (!data.set) return;
 
   document.getElementById('reconciliationRows').innerHTML = renderReconciliationRows(data);
+  // Не очищаем поле «Фактически» здесь — refreshDashboard() вызывается на
+  // множество не связанных с этой карточкой событий (любая новая операция,
+  // переключение вкладок и т.п.), и стирать то, что пользователь только что
+  // сверял, было бы раздражающим регрессом. Явно чистим только там, где это
+  // осмысленно — после успешного переноса точки отсчёта, см. кнопку выше.
   const actualInput = document.getElementById('reconciliationActualInput');
   actualInput.oninput = () => updateReconciliationMatch(data.expected);
   updateReconciliationMatch(data.expected);
@@ -1788,7 +1874,7 @@ const TOUR_STEPS = [
     tab: 'dashboard',
     selector: '#dashboardMonthCard',
     title: 'Дашборд — отчёт за месяц',
-    text: 'Здесь сводка по операциям за выбранный месяц: доход, расход, баланс и разбивка расходов по категориям. Месяц переключается стрелками или списком справа.',
+    text: 'Здесь сводка по операциям за выбранный месяц: доход, расход, баланс и разбивка расходов по категориям. Месяц переключается стрелками или списком справа. Строку со стрелочкой ▸ (сумма, в которую подшита категория цели) можно раскрыть кликом — увидите, сколько из неё сама категория, а сколько каждая подшитая цель.',
   },
   {
     tab: 'dashboard',
@@ -1829,7 +1915,7 @@ const TOUR_STEPS = [
     tab: 'transactions',
     selector: '#txRecurringField',
     title: 'Повторяющиеся операции',
-    text: 'Отметьте «Повтор.» для зарплаты, аренды, подписок — того, что вносится каждый месяц. Когда откроете новый месяц, где такой операции ещё нет, над списком появится подсказка добавить её снова (сумму можно поправить) или пропустить на этот месяц. Отключить повтор — кнопкой ✎ у последней такой операции в списке ниже.',
+    text: 'Отметьте «Повтор.» для зарплаты, аренды, подписок — того, что вносится каждый месяц. Когда откроете новый месяц, где такой операции ещё нет, над списком появится подсказка добавить её снова (сумму можно поправить) или пропустить на этот месяц. Для платежей с неизменной суммой можно вдобавок отметить «Не спрашивая» — тогда операция будет добавляться сама, без подсказки. Отключить повтор — кнопкой ✎ у последней такой операции в списке ниже.',
   },
   {
     tab: 'transactions',

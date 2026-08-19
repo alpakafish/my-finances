@@ -31,7 +31,7 @@ router.get('/suggestions', (req, res) => {
 
   const rows = db.prepare(`
     SELECT t.id AS source_id, t.date AS source_date, t.type, t.category_id, t.amount,
-           t.excluded_from_total, c.name AS category_name, c.color AS category_color
+           t.excluded_from_total, t.auto_confirm, c.name AS category_name, c.color AS category_color
     FROM transactions t
     JOIN categories c ON c.id = t.category_id
     WHERE t.is_recurring = 1
@@ -64,12 +64,15 @@ router.post('/:sourceId/confirm', (req, res) => {
   // в db.js. excluded_from_total ("нал.") тоже переносится — это свойство самого
   // повторяющегося платежа (например, аренда наличными), а не разовая пометка;
   // note намеренно не переносится — обычно одноразовый комментарий, устаревает.
+  // auto_confirm переносится по той же причине, что и is_recurring: без этого
+  // "не спрашивая" сработало бы один раз и молча вернулось бы к подсказкам
+  // со следующего месяца — источник для него исчезает вместе с demote ниже.
   const confirm = db.transaction(() => {
-    db.prepare('UPDATE transactions SET is_recurring = 0 WHERE id = ?').run(sourceId);
+    db.prepare('UPDATE transactions SET is_recurring = 0, auto_confirm = 0 WHERE id = ?').run(sourceId);
     return db.prepare(`
-      INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring)
-      VALUES (?, ?, ?, ?, '', ?, 1)
-    `).run(date, source.type, source.category_id, amount, source.excluded_from_total).lastInsertRowid;
+      INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm)
+      VALUES (?, ?, ?, ?, '', ?, 1, ?)
+    `).run(date, source.type, source.category_id, amount, source.excluded_from_total, source.auto_confirm).lastInsertRowid;
   });
 
   const id = confirm();

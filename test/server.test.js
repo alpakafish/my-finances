@@ -161,6 +161,47 @@ test('monthly summary reflects added transaction', async () => {
   assert.ok(summary.totalIncome >= 1000);
 });
 
+test('monthly summary: a rolled-up category row carries a components breakdown (Dashboard drill-down), plain categories don\'t', async () => {
+  const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
+  const savings = categories.find((c) => c.name === 'Сбережения');
+  const food = categories.find((c) => c.name === 'Еда');
+
+  const goal = await (await fetch(`${baseUrl}/api/goals`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Drill-down test goal', target_amount: 1000,
+      new_category: { name: 'Drill-down test category', rollup_id: savings.id },
+    }),
+  })).json();
+
+  await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2026-08-09', type: 'expense', category_id: savings.id, amount: 300, note: '' }),
+  });
+  await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2026-08-09', type: 'expense', category_id: goal.category_id, amount: 700, note: '' }),
+  });
+  await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2026-08-09', type: 'expense', category_id: food.id, amount: 50, note: '' }),
+  });
+
+  const summary = await (await fetch(`${baseUrl}/api/summary/2026-08`)).json();
+  const savingsRow = summary.expenseByCategory.find((c) => c.id === savings.id);
+  assert.equal(savingsRow.amount, 1000, 'combined sum unaffected — 300 direct + 700 rolled up from the goal category');
+  assert.ok(savingsRow.components, 'a rollup happened, so there must be a breakdown to drill into');
+  assert.equal(savingsRow.components.length, 2);
+  assert.equal(savingsRow.components.find((c) => c.id === savings.id).amount, 300);
+  assert.equal(savingsRow.components.find((c) => c.id === goal.category_id).amount, 700);
+
+  const foodRow = summary.expenseByCategory.find((c) => c.id === food.id);
+  assert.equal(foodRow.components, null, 'no rollup involved — nothing to drill into, must not carry a components array');
+
+  await fetch(`${baseUrl}/api/goals/${goal.id}`, { method: 'DELETE' });
+  await fetch(`${baseUrl}/api/categories/${goal.category_id}?deleteTransactions=true`, { method: 'DELETE' });
+});
+
 test('goal creation and contribution', async () => {
   const categories = await (await fetch(`${baseUrl}/api/categories`)).json();
   const savings = categories.find((c) => c.name === 'Сбережения');
@@ -673,6 +714,36 @@ test('recurring transactions: at most one active template per (category, type) �
   assert.equal(rows.find((t) => t.id === second.id).is_recurring, 1);
 });
 
+test('recurring transactions: auto_confirm ("не спрашивая") carries forward through confirm, is visible in suggestions, and clears if is_recurring is turned off', async () => {
+  const cat = await (await fetch(`${baseUrl}/api/categories`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Auto-confirm test', type: 'expense', color: '#444444' }),
+  })).json();
+
+  const source = await (await fetch(`${baseUrl}/api/transactions`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: '2032-01-05', type: 'expense', category_id: cat.id, amount: 500, note: '', is_recurring: true, auto_confirm: true }),
+  })).json();
+  assert.equal(source.auto_confirm, 1);
+
+  const febSuggestions = await (await fetch(`${baseUrl}/api/recurring/suggestions?month=2032-02`)).json();
+  const suggestion = febSuggestions.find((s) => s.source_id === source.id);
+  assert.ok(suggestion);
+  assert.equal(suggestion.auto_confirm, 1, 'the frontend needs this to auto-fire confirm instead of rendering a card');
+
+  const confirmed = await (await fetch(`${baseUrl}/api/recurring/${source.id}/confirm`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month: '2032-02', amount: 500 }),
+  })).json();
+  assert.equal(confirmed.auto_confirm, 1, 'auto_confirm must carry forward to the new template, or it would silently revert to manual next month');
+
+  // Turning off "Повтор." must also turn off "не спрашивая" — it's meaningless without it.
+  const editedRes = await fetch(`${baseUrl}/api/transactions/${confirmed.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_recurring: false }),
+  });
+  const edited = await editedRes.json();
+  assert.equal(edited.is_recurring, 0);
+  assert.equal(edited.auto_confirm, 0, 'auto_confirm must not be left dangling on a non-recurring row');
+});
+
 test('automatic backups: a today-dated file exists after startup, listed via settings with no error', async () => {
   const backupDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-backup-'));
   const { proc: backupChild, baseUrl: backupBaseUrl } = await startServer(backupDataDir);
@@ -886,6 +957,20 @@ test('trash (deleted-transactions): keeps last 10 with oldest trimmed, restore r
     assert.equal(restored.amount, 11);
     const monthList = await (await fetch(`${trashBaseUrl}/api/transactions?month=2026-08`)).json();
     assert.ok(monthList.some((t) => t.id === restored.id));
+
+    // auto_confirm ("не спрашивая") must round-trip through delete + restore,
+    // same as is_recurring already does — otherwise restoring a recurring
+    // template silently downgrades it to manual-confirm.
+    const autoTx = await (await fetch(`${trashBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: '2026-08-02', type: 'expense', category_id: food.id, amount: 42, note: 'auto-trash', is_recurring: true, auto_confirm: true }),
+    })).json();
+    await fetch(`${trashBaseUrl}/api/transactions/${autoTx.id}`, { method: 'DELETE' });
+    const trashWithAuto = await (await fetch(`${trashBaseUrl}/api/transactions/trash`)).json();
+    const autoTrashEntry = trashWithAuto.find((t) => t.note === 'auto-trash');
+    assert.equal(autoTrashEntry.auto_confirm, 1);
+    const autoRestored = await (await fetch(`${trashBaseUrl}/api/transactions/trash/${autoTrashEntry.id}/restore`, { method: 'POST' })).json();
+    assert.equal(autoRestored.auto_confirm, 1);
     const trashAfterRestore = await (await fetch(`${trashBaseUrl}/api/transactions/trash`)).json();
     assert.equal(trashAfterRestore.length, 9);
 

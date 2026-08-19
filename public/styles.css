@@ -131,6 +131,7 @@ h1 { font-size: 22px; font-weight: 600; }
 .match-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 20px; margin-top: 14px; }
 .match-pill.ok { background: rgba(29, 158, 117, 0.14); color: var(--color-income); }
 .match-pill.mismatch { background: rgba(216, 90, 48, 0.14); color: var(--color-expense-strong); }
+#reconciliationRebaseBtn { display: block; margin-top: 10px; }
 
 .tabs { display: flex; gap: 6px; margin-bottom: 0; }
 .tab-btn { font-size: 13px; padding: 8px 16px; border: 1px solid var(--color-border-input); border-radius: 8px 8px 0 0; cursor: pointer; color: var(--color-idle-control); background: transparent; font-family: inherit; }
@@ -177,6 +178,14 @@ h1 { font-size: 22px; font-weight: 600; }
 .cat-bar { height: 6px; border-radius: 3px; }
 .cat-pct { font-size: 11px; color: var(--color-text-quaternary); width: 38px; text-align: right; }
 .cat-val { font-size: 13px; font-weight: 500; width: 100px; text-align: right; }
+/* Строки на Дашборде со свёрнутой rollup-суммой (см. routes/summary.js
+   categoryBreakdown components) — можно провалиться внутрь и увидеть, сколько
+   из показанной суммы сама категория, а сколько — какая подшитая цель. */
+.cat-row-expandable { cursor: pointer; }
+.cat-expand-chevron { display: inline-block; font-size: 10px; color: var(--color-text-quaternary); margin-left: 4px; }
+.cat-breakdown { padding: 2px 0 8px 20px; }
+.cat-breakdown-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; color: var(--color-text-secondary); }
+.cat-breakdown-row .cat-breakdown-val { font-variant-numeric: tabular-nums; }
 /* Лимиты категорий (Дашборд/«По годам») переиспользуют .cat-row/.cat-bar-wrap/.cat-bar —
    тот же визуальный язык, что «Расходы по категориям». .cat-bar.exceeded — когда лимит
    превышен, шкала красная целиком, независимо от цвета самой категории (задаётся через

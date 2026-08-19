@@ -152,6 +152,7 @@ db.exec(`
     note TEXT DEFAULT '',
     excluded_from_total INTEGER NOT NULL DEFAULT 0,
     is_recurring INTEGER NOT NULL DEFAULT 0,
+    auto_confirm INTEGER NOT NULL DEFAULT 0,
     deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
@@ -187,6 +188,22 @@ if (!transactionColumns.includes('excluded_from_total')) {
 // флаг со старой при установке на новую), а не проверка в БД.
 if (!transactionColumns.includes('is_recurring')) {
   db.exec('ALTER TABLE transactions ADD COLUMN is_recurring INTEGER NOT NULL DEFAULT 0');
+}
+// Только имеет смысл вместе с is_recurring=1 — «добавлять автоматически, не
+// спрашивая» вместо карточки-подсказки (см. routes/recurring.js GET
+// /suggestions и public/app.js loadRecurringSuggestions). Переносится на
+// новую операцию вместе с самим is_recurring при подтверждении/авто-добавлении
+// следующего месяца (routes/recurring.js confirm) — иначе автодобавление
+// сработало бы только один раз и молча превратилось бы обратно в подсказку.
+if (!transactionColumns.includes('auto_confirm')) {
+  db.exec('ALTER TABLE transactions ADD COLUMN auto_confirm INTEGER NOT NULL DEFAULT 0');
+}
+// deleted_transactions уже существовало (не CREATE TABLE-время-фичи) до
+// добавления auto_confirm выше — та же ALTER-миграция нужна и здесь, иначе
+// на уже созданных БД снимок при удалении падал бы на нехватке колонки.
+const deletedTransactionColumns = db.prepare('PRAGMA table_info(deleted_transactions)').all().map((c) => c.name);
+if (!deletedTransactionColumns.includes('auto_confirm')) {
+  db.exec('ALTER TABLE deleted_transactions ADD COLUMN auto_confirm INTEGER NOT NULL DEFAULT 0');
 }
 
 const DEFAULT_EXPENSE_CATEGORIES = [

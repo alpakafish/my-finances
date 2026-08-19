@@ -35,7 +35,7 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { date, type, category_id, amount, note, excluded_from_total, is_recurring } = req.body;
+  const { date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm } = req.body;
   if (!isValidDate(date) || !['expense', 'income'].includes(type) || !category_id || !(amount > 0)) {
     return res.status(400).json({ error: 'Заполните дату, тип, категорию и сумму (> 0)' });
   }
@@ -44,11 +44,11 @@ router.post('/', (req, res) => {
   // новую в той же транзакции, а не полагаемся на ограничение в схеме.
   const insert = db.transaction(() => {
     if (is_recurring) {
-      db.prepare('UPDATE transactions SET is_recurring = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1').run(category_id, type);
+      db.prepare('UPDATE transactions SET is_recurring = 0, auto_confirm = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1').run(category_id, type);
     }
     return db.prepare(
-      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(date, type, category_id, amount, note || '', excluded_from_total ? 1 : 0, is_recurring ? 1 : 0).lastInsertRowid;
+      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(date, type, category_id, amount, note || '', excluded_from_total ? 1 : 0, is_recurring ? 1 : 0, is_recurring && auto_confirm ? 1 : 0).lastInsertRowid;
   });
   const id = insert();
   res.status(201).json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(id));
@@ -76,12 +76,12 @@ router.post('/trash/:id/restore', (req, res) => {
   }
   const restore = db.transaction(() => {
     if (trashed.is_recurring) {
-      db.prepare('UPDATE transactions SET is_recurring = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1')
+      db.prepare('UPDATE transactions SET is_recurring = 0, auto_confirm = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1')
         .run(trashed.category_id, trashed.type);
     }
     const id = db.prepare(
-      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(trashed.date, trashed.type, trashed.category_id, trashed.amount, trashed.note, trashed.excluded_from_total, trashed.is_recurring).lastInsertRowid;
+      'INSERT INTO transactions (date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(trashed.date, trashed.type, trashed.category_id, trashed.amount, trashed.note, trashed.excluded_from_total, trashed.is_recurring, trashed.auto_confirm).lastInsertRowid;
     db.prepare('DELETE FROM deleted_transactions WHERE id = ?').run(req.params.id);
     return id;
   });
@@ -92,16 +92,20 @@ router.post('/trash/:id/restore', (req, res) => {
 router.put('/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Операция не найдена' });
-  const { date, type, category_id, amount, note, excluded_from_total, is_recurring } = req.body;
+  const { date, type, category_id, amount, note, excluded_from_total, is_recurring, auto_confirm } = req.body;
   if (date !== undefined && date !== null && !isValidDate(date)) {
     return res.status(400).json({ error: 'Некорректная дата' });
   }
   const finalCategoryId = category_id || existing.category_id;
   const finalType = type || existing.type;
+  // "Не спрашивая" не имеет смысла без is_recurring — если снимают галочку
+  // "Повтор." в этом же запросе, гасим и её, а не оставляем висеть молча.
+  const finalIsRecurring = is_recurring === undefined ? existing.is_recurring : (is_recurring ? 1 : 0);
+  const finalAutoConfirm = !finalIsRecurring ? 0 : (auto_confirm === undefined ? existing.auto_confirm : (auto_confirm ? 1 : 0));
 
   const update = db.transaction(() => {
     if (is_recurring) {
-      db.prepare('UPDATE transactions SET is_recurring = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1 AND id != ?')
+      db.prepare('UPDATE transactions SET is_recurring = 0, auto_confirm = 0 WHERE category_id = ? AND type = ? AND is_recurring = 1 AND id != ?')
         .run(finalCategoryId, finalType, req.params.id);
     }
     db.prepare(`
@@ -112,12 +116,13 @@ router.put('/:id', (req, res) => {
         amount = COALESCE(?, amount),
         note = COALESCE(?, note),
         excluded_from_total = COALESCE(?, excluded_from_total),
-        is_recurring = COALESCE(?, is_recurring)
+        is_recurring = ?,
+        auto_confirm = ?
       WHERE id = ?
     `).run(
       date || null, type || null, category_id || null, amount || null, note ?? null,
       excluded_from_total === undefined ? null : (excluded_from_total ? 1 : 0),
-      is_recurring === undefined ? null : (is_recurring ? 1 : 0),
+      finalIsRecurring, finalAutoConfirm,
       req.params.id
     );
   });
@@ -134,11 +139,11 @@ router.delete('/:id', (req, res) => {
   if (!existing) return res.status(404).json({ error: 'Операция не найдена' });
   const del = db.transaction(() => {
     db.prepare(`
-      INSERT INTO deleted_transactions (date, type, category_id, category_name, amount, note, excluded_from_total, is_recurring)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO deleted_transactions (date, type, category_id, category_name, amount, note, excluded_from_total, is_recurring, auto_confirm)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       existing.date, existing.type, existing.category_id, existing.category_name,
-      existing.amount, existing.note, existing.excluded_from_total, existing.is_recurring
+      existing.amount, existing.note, existing.excluded_from_total, existing.is_recurring, existing.auto_confirm
     );
     db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
     // Держим только последние 10 — старше см. в бэкапах (backup.js).

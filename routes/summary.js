@@ -20,7 +20,30 @@ function categoryBreakdown(month, type) {
     ORDER BY amount DESC
   `).all(month, type);
   const total = rows.reduce((s, r) => s + r.amount, 0);
-  return rows.map((r) => ({ ...r, pct: total ? Math.round((r.amount / total) * 1000) / 10 : 0 }));
+
+  // Та же сумма, но по исходным категориям — до сворачивания rollup — чтобы на
+  // Дашборде можно было "провалиться внутрь" строки со свёрнутой суммой и
+  // увидеть, сколько из неё сама категория, а сколько — какая подшитая цель
+  // (раньше для этого нужно было идти на вкладку «Операции» и фильтровать
+  // вручную). components у строки нет вовсе, если туда ничего не сворачивалось
+  // (обычная, не-rollup категория) — нечего разворачивать.
+  const rawRows = db.prepare(`
+    SELECT c.id, c.name, c.color, c.rollup_id, SUM(t.amount) AS amount
+    FROM transactions t JOIN categories c ON c.id = t.category_id
+    WHERE substr(t.date, 1, 7) = ? AND t.type = ?
+    GROUP BY c.id
+  `).all(month, type);
+  const componentsByTargetId = {};
+  rawRows.forEach((r) => {
+    const targetId = r.rollup_id || r.id;
+    (componentsByTargetId[targetId] ||= []).push({ id: r.id, name: r.name, color: r.color, amount: r.amount });
+  });
+
+  return rows.map((r) => ({
+    ...r,
+    pct: total ? Math.round((r.amount / total) * 1000) / 10 : 0,
+    components: (componentsByTargetId[r.id]?.length ?? 0) > 1 ? componentsByTargetId[r.id] : null,
+  }));
 }
 
 router.get('/overview', (req, res) => {

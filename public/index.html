@@ -110,6 +110,7 @@
         <input type="number" step="0.01" id="reconciliationActualInput" placeholder="Сумма с карты">
       </div>
       <div id="reconciliationMatchPill"></div>
+      <button type="button" class="btn small secondary" id="reconciliationRebaseBtn" hidden>Обновить точку отсчёта на сегодня</button>
     </div>
 
     <div class="card" id="expenseChartCard">
@@ -176,6 +177,16 @@
                   <span class="info-icon">?</span>
                   <div class="tooltip-box">
                     Операция будет повторяться каждый месяц: когда откроете новый месяц, где такой операции ещё нет, появится подсказка добавить её снова — с той же суммой (можно поправить) или пропустить на этот месяц.
+                  </div>
+                </span>
+              </label>
+              <label class="checkbox-field" id="txAutoConfirmField" hidden>
+                <input type="checkbox" id="txAutoConfirm">
+                <span>Не спрашивая</span>
+                <span class="tooltip-wrap info-icon-wrap">
+                  <span class="info-icon">?</span>
+                  <div class="tooltip-box">
+                    Для платежей с неизменной суммой (аренда, подписка): вместо подсказки операция будет добавляться в новый месяц сама, с той же суммой. Поправить или удалить её потом можно как любую другую.
                   </div>
                 </span>
               </label>
