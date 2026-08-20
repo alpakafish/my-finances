@@ -354,6 +354,7 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'years') loadYearsTab();
     if (btn.dataset.tab === 'limits') loadLimitsTab();
     if (btn.dataset.tab === 'dashboard') refreshDashboard();
+    if (btn.dataset.tab === 'forecast') loadForecastTab();
   });
 });
 
@@ -1780,6 +1781,167 @@ document.getElementById('vacationForm').addEventListener('submit', async (e) => 
   }
 });
 
+// ---------- Budget forecast (черновик, не создаёт реальных операций) ----------
+// Собственный месяц, независимый от currentMonth (Дашборд/Лимиты/Сверка) —
+// прогноз по смыслу почти всегда про БУДУЩИЙ месяц, а currentMonth там
+// смотрит в основном в прошлое/настоящее. lastNMonths() выше устроен строго
+// "от сегодня назад", поэтому для прогноза нужен отдельный список месяцев,
+// включающий и будущее.
+let forecastMonth = monthKey(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1));
+
+function forecastMonthOptions(n = 15) {
+  const now = new Date();
+  const list = [];
+  for (let i = -2; i < n - 2; i++) {
+    list.push(monthKey(new Date(now.getFullYear(), now.getMonth() + i, 1)));
+  }
+  return list;
+}
+
+function populateForecastMonthSelector() {
+  const select = document.getElementById('forecastMonthSelect');
+  select.innerHTML = forecastMonthOptions().map((m) => `<option value="${m}">${monthLabel(m)}</option>`).join('');
+  select.value = forecastMonth;
+}
+
+document.getElementById('forecastMonthSelect').addEventListener('change', (e) => {
+  forecastMonth = e.target.value;
+  loadForecastTab();
+});
+document.getElementById('forecastPrevMonth').addEventListener('click', () => shiftForecastMonth(-1));
+document.getElementById('forecastNextMonth').addEventListener('click', () => shiftForecastMonth(1));
+function shiftForecastMonth(delta) {
+  const select = document.getElementById('forecastMonthSelect');
+  const idx = Array.from(select.options).findIndex((o) => o.value === forecastMonth);
+  const newIdx = idx + delta;
+  if (newIdx >= 0 && newIdx < select.options.length) {
+    forecastMonth = select.options[newIdx].value;
+    select.value = forecastMonth;
+    loadForecastTab();
+  }
+}
+
+// Опции каждого select'а пересчитываются на КАЖДОЕ изменение (добавление/
+// удаление/смена категории в любой строке), а не только при создании строки —
+// иначе список вариантов у уже существующих строк не знал бы о категории,
+// выбранной ПОЗЖЕ в другой строке, и одну и ту же категорию можно было бы
+// незаметно выбрать дважды через сам select (дубликат ловился бы только на
+// Save, серверной проверкой) — найдено при живой проверке этой самой фичи.
+function refreshForecastRowOptions() {
+  const rows = Array.from(document.querySelectorAll('#forecastRows .forecast-row'));
+  // Пока у строки ещё нет ни одной <option> (только что создана, ниже),
+  // select.value пуст — берём желаемую категорию из data-desired вместо
+  // NaN, иначе первый же пересчёт "забыл" бы, какую категорию эта строка
+  // вообще должна была получить.
+  const chosen = rows.map((row) => {
+    const select = row.querySelector('select');
+    return select.options.length ? Number(select.value) : Number(row.dataset.desired);
+  });
+  rows.forEach((row, i) => {
+    const select = row.querySelector('select');
+    const current = chosen[i];
+    const usedByOthers = chosen.filter((_, j) => j !== i);
+    select.innerHTML = categories.filter((c) => c.type === 'expense' && (c.id === current || !usedByOthers.includes(c.id)))
+      .map((c) => `<option value="${c.id}" ${c.id === current ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+  });
+}
+
+function addForecastRow(categoryId, amount) {
+  const container = document.getElementById('forecastRows');
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <div class="forecast-row" data-desired="${categoryId}">
+      <select></select>
+      <input type="number" min="0" step="0.01" value="${amount ?? ''}" placeholder="0">
+      <button type="button" class="btn small secondary" data-role="remove-forecast-row" aria-label="Удалить категорию">✕</button>
+    </div>
+  `.trim();
+  const row = div.firstChild;
+  container.appendChild(row);
+  row.querySelector('select').addEventListener('change', () => { refreshForecastRowOptions(); recalcForecast(); });
+  row.querySelector('input').addEventListener('input', recalcForecast);
+  row.querySelector('[data-role="remove-forecast-row"]').addEventListener('click', () => { row.remove(); refreshForecastRowOptions(); recalcForecast(); });
+  refreshForecastRowOptions();
+}
+
+document.getElementById('forecastAddRowBtn').addEventListener('click', () => {
+  const used = Array.from(document.querySelectorAll('#forecastRows .forecast-row select')).map((s) => Number(s.value));
+  const next = categories.find((c) => c.type === 'expense' && !used.includes(c.id));
+  if (!next) { toast('Все категории расходов уже добавлены'); return; }
+  addForecastRow(next.id, '');
+  recalcForecast();
+});
+
+function recalcForecast() {
+  const income = Number(document.getElementById('forecastIncome').value) || 0;
+  const amounts = Array.from(document.querySelectorAll('#forecastRows .forecast-row input[type="number"]'))
+    .map((i) => Number(i.value) || 0);
+  const expenses = amounts.reduce((a, b) => a + b, 0);
+  const leftover = income - expenses;
+  document.getElementById('forecastOutIncome').textContent = fmt(income);
+  document.getElementById('forecastOutExpenses').textContent = fmt(expenses);
+  const leftoverEl = document.getElementById('forecastOutLeftover');
+  leftoverEl.textContent = fmt(leftover);
+  leftoverEl.style.color = leftover < 0 ? 'var(--color-expense)' : '';
+
+  const purchaseName = document.getElementById('forecastPurchaseName').value.trim();
+  const purchaseAmount = Number(document.getElementById('forecastPurchaseAmount').value) || 0;
+  const resultEl = document.getElementById('forecastPurchaseResult');
+  if (!purchaseName && !purchaseAmount) { resultEl.textContent = ''; return; }
+  const afterPurchase = leftover - purchaseAmount;
+  const label = purchaseName || 'покупку';
+  if (afterPurchase >= 0) {
+    resultEl.style.color = 'var(--color-income)';
+    resultEl.textContent = `Хватает на «${label}» — останется ${fmt(afterPurchase)}`;
+  } else {
+    resultEl.style.color = 'var(--color-expense)';
+    resultEl.textContent = `Не хватает на «${label}» — не хватает ${fmt(-afterPurchase)}`;
+  }
+}
+
+['forecastIncome', 'forecastPurchaseName', 'forecastPurchaseAmount'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', recalcForecast);
+});
+
+async function loadForecastTab() {
+  populateForecastMonthSelector();
+  const draft = await api(`/api/budget-forecast/${forecastMonth}`);
+  document.getElementById('forecastIncome').value = draft.income || '';
+  document.getElementById('forecastPurchaseName').value = draft.one_off_name || '';
+  document.getElementById('forecastPurchaseAmount').value = draft.one_off_amount || '';
+  document.getElementById('forecastRows').innerHTML = '';
+  draft.items.forEach((item) => addForecastRow(item.category_id, item.amount));
+  recalcForecast();
+}
+
+document.getElementById('forecastSaveBtn').addEventListener('click', async () => {
+  const items = Array.from(document.querySelectorAll('#forecastRows .forecast-row')).map((row) => ({
+    category_id: Number(row.querySelector('select').value),
+    amount: Number(row.querySelector('input[type="number"]').value) || 0,
+  }));
+  try {
+    await api(`/api/budget-forecast/${forecastMonth}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        income: Number(document.getElementById('forecastIncome').value) || 0,
+        one_off_name: document.getElementById('forecastPurchaseName').value.trim(),
+        one_off_amount: Number(document.getElementById('forecastPurchaseAmount').value) || 0,
+        items,
+      }),
+    });
+    toast('Черновик сохранён');
+  } catch (e) { toast(e.message, true); }
+});
+
+document.getElementById('forecastClearBtn').addEventListener('click', async () => {
+  if (!confirm('Очистить черновик прогноза за этот месяц?')) return;
+  try {
+    await api(`/api/budget-forecast/${forecastMonth}`, { method: 'DELETE' });
+    await loadForecastTab();
+    toast('Черновик очищен');
+  } catch (e) { toast(e.message, true); }
+});
+
 // ---------- Settings ----------
 document.getElementById('deleteAllDataBtn').addEventListener('click', () => {
   showConfirmModal({
@@ -2070,6 +2232,13 @@ const TOUR_STEPS = [
     selector: '#vacationFormCard',
     title: 'Расчёт отпускных',
     text: 'Только по ТК РФ, упрощённо (по окладу, не по среднему за 12 месяцев). Укажите оклад, даты отпуска (включительно) и числа выплат в месяце — увидите, сколько получите за 3 дня до отпуска, и сколько придёт в обе ближайшие выплаты с учётом отпуска. Праздники и переносы выходных проверяются через открытый производственный календарь (isdayoff.ru) — уходят только даты, без ваших сумм.',
+  },
+  // ---------- Прогноз ----------
+  {
+    tab: 'forecast',
+    selector: '#tab-forecast',
+    title: 'Прогноз бюджета',
+    text: 'Черновик на будущий месяц: планируемый доход, суммы по категориям расходов и разовая покупка, которую хочется проверить ("хватит ли на новую клавиатуру"). Это только прикидка — ничего здесь не создаёт реальных операций и не влияет ни на один отчёт, можно менять сколько угодно раз.',
   },
   // ---------- Настройки ----------
   {

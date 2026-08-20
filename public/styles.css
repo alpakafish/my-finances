@@ -338,6 +338,10 @@ td.amount-income { color: var(--color-income); }
 .limit-cat-name { font-size: 13px; color: var(--color-text); width: 160px; flex-shrink: 0; }
 .limit-row .field input { width: 130px; min-width: 0; }
 
+.forecast-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.forecast-row select { flex: 1; min-width: 0; }
+.forecast-row input[type="number"] { width: 130px; flex-shrink: 0; }
+
 .limit-notifications {
   position: fixed; top: 20px; right: 20px; z-index: 150;
   display: flex; flex-direction: column; gap: 10px; max-width: 340px;

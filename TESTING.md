@@ -162,3 +162,28 @@ path (external service unreachable → falls back to weekends-only via
 `fallbackCalendar()`, frontend shows a warning) — verified manually (see
 `public/app.js` `renderVacationResult`), same class of gap as other
 frontend-only behavior above.
+
+Also covered: the budget forecast draft (`routes/budget-forecast.js`,
+"Прогноз" tab, 2026-08-19) — a hypothetical income/per-category-spend/
+one-off-purchase sketch for a future month, stored in its own
+`budget_drafts`/`budget_draft_items` tables and never touching
+`transactions`. The test round-trips income/items/one-off purchase through
+`PUT`/`GET`, checks validation (negative income, a category listed twice in
+one draft, a nonexistent/non-expense category id), confirms overwriting a
+period replaces its item list wholesale rather than appending, confirms a
+real transaction in the same month neither leaks into the draft nor is
+touched by it (and vice versa — the draft doesn't show up in `/api/summary`),
+confirms deleting a category referenced by a draft item cascades to just
+that item (`ON DELETE CASCADE` in `db.js`, not a blocked delete), and
+confirms `DELETE` on an already-empty period doesn't error and
+`delete-all-data` wipes drafts too. Not covered by an automated test: the
+frontend's per-row category dropdown mutual-exclusion (each row's `<select>`
+excludes categories already chosen by sibling rows, refreshed live on every
+add/remove/change) — found to be needed during manual live-preview testing,
+not a bug report; before the fix, a row's dropdown only excluded categories
+*used at the time that row was created*, so a category picked in a
+later-added row wasn't excluded from an earlier row's still-open dropdown,
+letting the same category be selected twice through the UI (caught only at
+`Save` by the backend's duplicate check, not prevented in the UI). Fixed
+with `refreshForecastRowOptions()`, called after every add/remove/change
+across all rows, not just the one that changed.

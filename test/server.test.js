@@ -1363,3 +1363,116 @@ test('vacation pay: input validation, and one real end-to-end call against isday
   assert.equal(body.vacationPay.date, '2026-08-28');
   assert.equal(body.vacationPay.amount, body.netSalary / 29.3 * body.vacationPay.paidDays);
 });
+
+// ---------- Budget forecast draft (routes/budget-forecast.js) ----------
+test('budget forecast: empty by default, round-trips income/categories/one-off purchase, rejects invalid input, wiped by delete-all-data, unaffected by (and unaffecting) real transactions', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smeta-test-forecast-'));
+  const { proc, baseUrl: forecastBaseUrl } = await startServer(dir);
+  try {
+    const empty = await (await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`)).json();
+    assert.deepEqual(empty, { period: '2026-09', income: 0, one_off_name: '', one_off_amount: 0, items: [] });
+
+    const badPeriodRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/not-a-month`);
+    assert.equal(badPeriodRes.status, 400);
+
+    const categories = await (await fetch(`${forecastBaseUrl}/api/categories?type=expense`)).json();
+    const food = categories.find((c) => c.name === 'Еда');
+    const bills = categories.find((c) => c.name === 'Счета');
+    const transport = categories.find((c) => c.name === 'Транспорт');
+
+    const badIncomeRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ income: -1, one_off_name: '', one_off_amount: 0, items: [] }),
+    });
+    assert.equal(badIncomeRes.status, 400, 'negative income must be rejected');
+
+    const dupCategoryRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        income: 100000, one_off_name: '', one_off_amount: 0,
+        items: [{ category_id: food.id, amount: 100 }, { category_id: food.id, amount: 200 }],
+      }),
+    });
+    assert.equal(dupCategoryRes.status, 400, 'the same category twice in one draft must be rejected');
+
+    const incomeCategory = categories.find((c) => c.type !== 'expense');
+    const wrongTypeRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ income: 100000, one_off_name: '', one_off_amount: 0, items: [{ category_id: 999999, amount: 100 }] }),
+    });
+    assert.equal(wrongTypeRes.status, 400, 'a nonexistent/non-expense category must be rejected');
+
+    const saveRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        income: 100000, one_off_name: 'Клавиатура', one_off_amount: 8000,
+        items: [{ category_id: food.id, amount: 40000 }, { category_id: bills.id, amount: 5000 }, { category_id: transport.id, amount: 10000 }],
+      }),
+    });
+    assert.equal(saveRes.status, 200);
+    const saved = await saveRes.json();
+    assert.equal(saved.income, 100000);
+    assert.equal(saved.one_off_name, 'Клавиатура');
+    assert.equal(saved.one_off_amount, 8000);
+    assert.equal(saved.items.length, 3);
+    assert.ok(saved.items.every((i) => i.category_name), 'items carry the category name/color, not just the id');
+
+    // Overwriting the same period replaces the item list wholesale (2 items,
+    // not 5) — this is what exercises the "DELETE then re-INSERT" path in
+    // the PUT handler, not just a first-time insert.
+    const overwriteRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ income: 120000, one_off_name: '', one_off_amount: 0, items: [{ category_id: food.id, amount: 45000 }] }),
+    });
+    const overwritten = await overwriteRes.json();
+    assert.equal(overwritten.items.length, 1);
+    assert.equal(overwritten.income, 120000);
+
+    // A real transaction in the same month must not be touched by, or
+    // influence, the draft — this whole feature is explicitly supposed to be
+    // invisible to routes/summary.js and everything else that reads
+    // transactions.
+    await fetch(`${forecastBaseUrl}/api/transactions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: '2026-09-05', type: 'expense', category_id: food.id, amount: 12345, note: 'real spending' }),
+    });
+    const summary = await (await fetch(`${forecastBaseUrl}/api/summary/2026-09`)).json();
+    assert.equal(summary.totalExpense, 12345, 'the draft\'s planned 45000 for Еда must not leak into the real monthly summary');
+    const draftAfterRealTx = await (await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`)).json();
+    assert.equal(draftAfterRealTx.items[0].amount, 45000, 'the real transaction must not change the draft either');
+
+    // Deleting the category referenced by a draft item removes just that
+    // item via ON DELETE CASCADE, instead of blocking the category delete or
+    // leaving a dangling reference (see db.js schema comment).
+    const anotherDraftRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-10`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ income: 50000, one_off_name: '', one_off_amount: 0, items: [{ category_id: transport.id, amount: 3000 }] }),
+    });
+    const anotherDraft = await anotherDraftRes.json();
+    assert.equal(anotherDraft.items.length, 1);
+    const catDeleteRes = await fetch(`${forecastBaseUrl}/api/categories/${transport.id}?reassignTo=${bills.id}`, { method: 'DELETE' });
+    assert.equal(catDeleteRes.status, 204);
+    const draftAfterCategoryDelete = await (await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-10`)).json();
+    assert.equal(draftAfterCategoryDelete.items.length, 0);
+
+    const deleteRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`, { method: 'DELETE' });
+    assert.equal(deleteRes.status, 204);
+    const afterDelete = await (await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`)).json();
+    assert.deepEqual(afterDelete, { period: '2026-09', income: 0, one_off_name: '', one_off_amount: 0, items: [] });
+    // Deleting an already-empty draft (no PUT ever made for this period) must
+    // not error — the frontend can call this unconditionally.
+    const deleteAgainRes = await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-09`, { method: 'DELETE' });
+    assert.equal(deleteAgainRes.status, 204);
+
+    await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-11`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ income: 90000, one_off_name: '', one_off_amount: 0, items: [{ category_id: bills.id, amount: 5000 }] }),
+    });
+    await fetch(`${forecastBaseUrl}/api/settings/all-data`, { method: 'DELETE' });
+    const afterWipe = await (await fetch(`${forecastBaseUrl}/api/budget-forecast/2026-11`)).json();
+    assert.deepEqual(afterWipe, { period: '2026-11', income: 0, one_off_name: '', one_off_amount: 0, items: [] });
+  } finally {
+    proc.kill('SIGTERM');
+    removeDataDir(dir);
+  }
+});

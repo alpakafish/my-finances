@@ -156,6 +156,36 @@ db.exec(`
     uuid TEXT,
     deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Черновик прогноза бюджета на месяц (см. routes/budget-forecast.js) —
+  -- гипотетические доход/расходы, которые пользователь прикидывает заранее
+  -- ("хватит ли на новую клавиатуру"), намеренно НЕ создают ни одной строки
+  -- в transactions и никак не влияют на реальные суммы/отчёты. period —
+  -- "YYYY-MM", один черновик на месяц (не список — упрощение: конкурирующих
+  -- сценариев на один месяц не предполагается).
+  CREATE TABLE IF NOT EXISTS budget_drafts (
+    period TEXT PRIMARY KEY,
+    income REAL NOT NULL DEFAULT 0,
+    one_off_name TEXT NOT NULL DEFAULT '',
+    one_off_amount REAL NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Планируемая сумма по категории внутри черновика. ON DELETE CASCADE и на
+  -- period (черновик очищен целиком — PUT ниже переcохраняет все строки
+  -- разом), и на category_id — если пользователь удаляет саму категорию,
+  -- строка прогноза по ней тихо исчезает вместе с ней, а не блокирует
+  -- удаление категории и не остаётся висеть на несуществующей ссылке (тот
+  -- же класс FK-проверки, что для goals/rollup, см. CLAUDE.md, только через
+  -- каскад в схеме, а не ручную проверку в роуте — черновик ничем не рискует
+  -- при таком удалении, в отличие от реальных операций/целей).
+  CREATE TABLE IF NOT EXISTS budget_draft_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL REFERENCES budget_drafts(period) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    amount REAL NOT NULL,
+    UNIQUE(period, category_id)
+  );
 `);
 
 // Миграция: колонка rollup_id могла отсутствовать в базе, созданной до появления целей.
@@ -265,6 +295,12 @@ db.resetAllData = db.transaction(() => {
   db.exec('DELETE FROM recurring_dismissals');
   db.exec('DELETE FROM overall_budget_notification_dismissals');
   db.exec('DELETE FROM deleted_transactions');
+  // Черновики прогноза ссылаются на category_id — после DELETE FROM categories
+  // выше эти ссылки уже не на что указывали бы (см. auto_confirm/uuid чек-лист
+  // в CLAUDE.md: любое новое хранилище нужно явно продумать на «Удалить все
+  // данные»). budget_draft_items чистится сам через ON DELETE CASCADE от
+  // budget_drafts, поэтому отдельного DELETE для него не нужно.
+  db.exec('DELETE FROM budget_drafts');
   // В отличие от currency/onboarding_seen (настройки приложения, resetAllData
   // их не трогает) — общий бюджет и точка отсчёта сверки с картой это
   // финансовое планирование, того же рода, что monthly_limit у категорий

@@ -64,6 +64,7 @@
     <button class="tab-btn" data-tab="goals">Цели</button>
     <button class="tab-btn" data-tab="years">По годам</button>
     <button class="tab-btn" data-tab="vacation">Отпускные</button>
+    <button class="tab-btn" data-tab="forecast">Прогноз</button>
     <button class="tab-btn" data-tab="settings">Настройки</button>
   </div>
 
@@ -463,6 +464,58 @@
       <div class="section-label">Результат</div>
       <div class="recon-rows" id="vacationResultRows"></div>
       <div class="empty-hint" id="vacationCalendarWarning" style="display:none; text-align:left; color:var(--color-expense);"></div>
+    </div>
+  </div>
+
+  <!-- BUDGET FORECAST -->
+  <div class="tab-panel" id="tab-forecast">
+    <div class="card">
+      <div class="section-label" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Прогноз бюджета</span>
+        <div class="month-nav">
+          <button id="forecastPrevMonth">‹</button>
+          <select id="forecastMonthSelect"></select>
+          <button id="forecastNextMonth">›</button>
+        </div>
+      </div>
+      <div class="empty-hint" style="text-align:left; padding:0 0 16px; color:var(--color-text-tertiary);">
+        Черновик — только прикидка на будущее, ничего здесь не создаёт реальных операций и не влияет на отчёты.
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label>Планируемый доход</label>
+          <input type="number" id="forecastIncome" min="0" step="0.01" placeholder="0">
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top:8px;">Расходы по категориям</div>
+      <div id="forecastRows"></div>
+      <button type="button" class="btn small secondary" id="forecastAddRowBtn" style="margin-bottom:16px;">+ Добавить категорию</button>
+
+      <div class="section-label">Проверить разовую покупку</div>
+      <div class="form-row" style="margin-bottom:16px;">
+        <div class="field">
+          <label>Что купить</label>
+          <input type="text" id="forecastPurchaseName" placeholder="например, клавиатура">
+        </div>
+        <div class="field">
+          <label>Сумма</label>
+          <input type="number" id="forecastPurchaseAmount" min="0" step="0.01" placeholder="0">
+        </div>
+      </div>
+
+      <div class="metrics">
+        <div class="metric income"><div class="label">Доход</div><div class="value" id="forecastOutIncome">—</div></div>
+        <div class="metric expense"><div class="label">Расходы (план)</div><div class="value" id="forecastOutExpenses">—</div></div>
+        <div class="metric"><div class="label">Остаток</div><div class="value" id="forecastOutLeftover">—</div></div>
+      </div>
+      <div class="empty-hint" id="forecastPurchaseResult" style="text-align:left;"></div>
+
+      <div style="display:flex; gap:8px; margin-top:16px;">
+        <button type="button" class="btn" id="forecastSaveBtn">Сохранить черновик</button>
+        <button type="button" class="btn secondary" id="forecastClearBtn">Очистить</button>
+      </div>
     </div>
   </div>
 
